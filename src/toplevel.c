@@ -1,6 +1,5 @@
 #include "toplevel.h"
 #include "icon_loader.h"
-#include "workspace.h"
 #include "bar.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 
@@ -78,19 +77,8 @@ static void handle_state(void *data, struct zwlr_foreign_toplevel_handle_v1 *han
             tl->minimized = true;
     }
 
-    /* When a toplevel becomes activated, it must be on the
-       currently visible workspace. Record that workspace index. */
-    if (tl->activated && !was_activated) {
+    if (tl->activated && !was_activated)
         tl->focus_seq = ++mgr->focus_counter;
-        /* Snap this toplevel to the active workspace */
-        struct workspace_manager *wm = mgr->bar->workspace_mgr;
-        for (int i = 0; i < wm->workspace_count; i++) {
-            if (wm->workspaces[i].state == WORKSPACE_ACTIVE) {
-                tl->workspace_idx = i;
-                break;
-            }
-        }
-    }
 
     toplevel_manager_sort(mgr);
     bar_redraw(mgr->bar);
@@ -154,7 +142,7 @@ static void mgr_toplevel(void *data,
     memset(tl, 0, sizeof(*tl));
     tl->handle = handle;
     tl->focus_seq = 0;
-    tl->workspace_idx = -1;  /* unknown workspace */
+    tl->workspace_idx = -1;
     mgr->count++;
 
     zwlr_foreign_toplevel_handle_v1_add_listener(handle, &handle_listener, mgr);
@@ -173,26 +161,9 @@ static const struct zwlr_foreign_toplevel_manager_v1_listener mgr_listener = {
 
 void toplevel_manager_sort(struct toplevel_manager *mgr) {
     mgr->sorted_count = 0;
-    int active_ws = -1;
-    struct workspace_manager *wm = mgr->bar->workspace_mgr;
-    for (int i = 0; i < wm->workspace_count; i++) {
-        if (wm->workspaces[i].state == WORKSPACE_ACTIVE) {
-            active_ws = i;
-            break;
-        }
-    }
-
     for (int i = 0; i < mgr->count; i++) {
-        /* Include a toplevel if:
-           - it's on the active workspace, OR
-           - we don't know its workspace yet (workspace_idx == -1)
-             AND it has output_count > 0 (visible on this output)
-           - and it's not minimized */
         struct toplevel_info *tl = &mgr->toplevels[i];
-        bool visible = true;
-        if (tl->minimized) visible = false;
-        else if (tl->workspace_idx >= 0 && tl->workspace_idx != active_ws) visible = false;
-        if (visible)
+        if (!tl->minimized)
             mgr->sorted_indices[mgr->sorted_count++] = i;
     }
 }

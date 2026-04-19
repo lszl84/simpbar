@@ -38,10 +38,19 @@ static void ws_handle_state(void *data, struct ext_workspace_handle_v1 *handle,
                             uint32_t state) {
     struct workspace_manager *mgr = data;
     struct workspace_info *ws = find_workspace_by_handle(mgr, handle);
-    if (ws) {
-        ws->state = (state & EXT_WORKSPACE_HANDLE_V1_STATE_ACTIVE)
-                        ? WORKSPACE_ACTIVE : WORKSPACE_INACTIVE;
+    if (!ws) return;
+
+    enum workspace_state new_state =
+        (state & EXT_WORKSPACE_HANDLE_V1_STATE_ACTIVE)
+            ? WORKSPACE_ACTIVE : WORKSPACE_INACTIVE;
+
+    if (ws->state != new_state) {
+        ws->state = new_state;
         mgr->dirty = true;
+        /* Fast UI response: redraw immediately, don't wait for done */
+        if (mgr->bar->toplevel_mgr)
+            toplevel_manager_sort(mgr->bar->toplevel_mgr);
+        bar_redraw(mgr->bar);
     }
 }
 
@@ -102,7 +111,6 @@ static void mgr_done(void *data, struct ext_workspace_manager_v1 *mgr_proto) {
     struct workspace_manager *mgr = data;
     if (mgr->dirty) {
         mgr->dirty = false;
-        /* Re-sort toplevels since the active workspace changed */
         if (mgr->bar->toplevel_mgr)
             toplevel_manager_sort(mgr->bar->toplevel_mgr);
         bar_redraw(mgr->bar);

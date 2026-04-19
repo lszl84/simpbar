@@ -45,6 +45,7 @@ static int create_shm_file(size_t size) {
 }
 
 struct buffer {
+    struct bar *bar;
     struct wl_buffer *wl_buf;
     void *data;
     size_t size;
@@ -58,6 +59,12 @@ static void buffer_release(void *data, struct wl_buffer *wl_buf) {
     (void)wl_buf;
     struct buffer *buf = data;
     buf->busy = false;
+
+    /* If a redraw was requested while both buffers were busy, render now. */
+    if (buf->bar && buf->bar->pending_redraw) {
+        buf->bar->pending_redraw = false;
+        bar_redraw(buf->bar);
+    }
 }
 
 static const struct wl_buffer_listener buffer_listener = {
@@ -85,6 +92,7 @@ static struct buffer *buffer_create(struct bar *bar) {
     wl_shm_pool_destroy(pool);
 
     struct buffer *buf = calloc(1, sizeof(*buf));
+    buf->bar = bar;
     buf->wl_buf = wl_buf;
     buf->data = data;
     buf->size = size;
@@ -246,7 +254,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
         }
     }
 
-    // Running applications (left side, sorted by focus order)
+    // Running applications (left side, stable order)
     {
         double lx = 10;
         double icon_draw_sz = h - 10;
@@ -256,6 +264,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
             int idx = bar->toplevel_mgr->sorted_indices[si];
             struct toplevel_info *tl = &bar->toplevel_mgr->toplevels[idx];
             if (!tl->app_id[0] && !tl->title[0]) continue;
+
             if (lx + icon_draw_sz > rx - 20) break;
 
             tl->render_x = lx;
@@ -342,7 +351,11 @@ static void render_frame(struct bar *bar) {
     if (!bar->configured) return;
 
     struct buffer *buf = get_buffer(bar);
-    if (!buf) return;
+    if (!buf) {
+        /* Both buffers busy, render on next release callback immediately. */
+        bar->pending_redraw = true;
+        return;
+    }
 
     cairo_t *cr = cairo_create(buf->cairo_surface);
     render_content(bar, cr);
@@ -607,23 +620,8 @@ int bar_run(struct bar *bar) {
     time_t last_update = 0;
 
     while (bar->running) {
-        if (wl_display_flush(bar->display) < 0 && errno != EAGAIN) break;
-
-        struct pollfd pfd = {
-            .fd = wl_display_get_fd(bar->display),
-            .events = POLLIN,
-        };
-
-        if (poll(&pfd, 1, 1000) < 0) {
-            if (errno == EINTR) continue;
+        if (wl_display_dispatch(bar->display) < 0)
             break;
-        }
-
-        if (pfd.revents & POLLIN) {
-            if (wl_display_dispatch(bar->display) < 0) break;
-        } else {
-            wl_display_dispatch_pending(bar->display);
-        }
 
         time_t now = time(NULL);
         if (now != last_update && bar->configured) {

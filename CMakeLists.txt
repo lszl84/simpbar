@@ -74,3 +74,25 @@ target_link_libraries(simpbar
     m
     rt
 )
+
+# Release build flags
+target_compile_options(simpbar PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+
+# Install
+include(GNUInstallDirs)
+
+install(TARGETS simpbar
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(DIRECTORY protocol/
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/simpbar/protocol
+    FILES_MATCHING PATTERN "*.xml"
+)
+
+# Uninstall target
+add_custom_target(uninstall
+    COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_INSTALL_FULL_BINDIR}/simpbar
+    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_INSTALL_FULL_DATAROOTDIR}/simpbar/protocol
+    COMMENT "Uninstalling simpbar"
+)

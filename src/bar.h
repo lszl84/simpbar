@@ -39,6 +39,7 @@ struct bar {
     int height;
     int scale;
     bool configured;
+    bool pending_redraw;
     int running;
 
     double pointer_x;
