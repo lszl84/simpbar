@@ -399,6 +399,7 @@ static void pointer_enter(void *data, struct wl_pointer *pointer,
         if (cursor && cursor->image_count > 0) {
             struct wl_cursor_image *img = cursor->images[0];
             struct wl_buffer *buf = wl_cursor_image_get_buffer(img);
+            wl_surface_set_buffer_scale(bar->cursor_surface, bar->scale);
             wl_surface_attach(bar->cursor_surface, buf, 0, 0);
             wl_surface_damage_buffer(bar->cursor_surface, 0, 0, img->width, img->height);
             wl_surface_commit(bar->cursor_surface);

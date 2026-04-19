@@ -44,13 +44,19 @@ static void handle_app_id(void *data, struct zwlr_foreign_toplevel_handle_v1 *ha
 static void handle_output_enter(void *data,
                                 struct zwlr_foreign_toplevel_handle_v1 *handle,
                                 struct wl_output *output) {
-    (void)data; (void)handle; (void)output;
+    (void)output;
+    struct toplevel_manager *mgr = data;
+    struct toplevel_info *tl = find_by_handle(mgr, handle);
+    if (tl) tl->output_count++;
 }
 
 static void handle_output_leave(void *data,
                                 struct zwlr_foreign_toplevel_handle_v1 *handle,
                                 struct wl_output *output) {
-    (void)data; (void)handle; (void)output;
+    (void)output;
+    struct toplevel_manager *mgr = data;
+    struct toplevel_info *tl = find_by_handle(mgr, handle);
+    if (tl && tl->output_count > 0) tl->output_count--;
 }
 
 static void handle_state(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle,
@@ -141,9 +147,11 @@ static const struct zwlr_foreign_toplevel_manager_v1_listener mgr_listener = {
 };
 
 void toplevel_manager_sort(struct toplevel_manager *mgr) {
-    mgr->sorted_count = mgr->count;
-    for (int i = 0; i < mgr->count; i++)
-        mgr->sorted_indices[i] = i;
+    mgr->sorted_count = 0;
+    for (int i = 0; i < mgr->count; i++) {
+        if (mgr->toplevels[i].output_count > 0)
+            mgr->sorted_indices[mgr->sorted_count++] = i;
+    }
 }
 
 struct toplevel_info *toplevel_at_x(struct toplevel_manager *mgr, double x) {
