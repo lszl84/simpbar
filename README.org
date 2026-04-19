@@ -6,8 +6,6 @@
 
 ~simpbar~ is a lightweight status bar for Wayland compositors. It uses =wlr-layer-shell= for positioning and =wl_shm= with Cairo for rendering. No GPU required -- pure CPU software rendering with HiDPI support.
 
-[[file:screenshot.png]]
-
 ** Features
 
 - *Workspace indicators* (Zorin OS style) -- rounded bar for active workspace, grey dot for inactive. Wired to the compositor via =ext-workspace-v1= protocol.
