@@ -1,11 +1,14 @@
 #include "bar.h"
 #include "registry.h"
 #include "workspace.h"
+#include "toplevel.h"
 #include "battery.h"
 #include "volume.h"
 #include "clock.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "ext-workspace-v1-client-protocol.h"
+#include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
+#include <wayland-cursor.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +23,7 @@
 #include <sys/mman.h>
 #include <cairo/cairo.h>
 
-#define BAR_HEIGHT 28
+#define BAR_HEIGHT 32
 
 static int create_shm_file(size_t size) {
     int fd = -1;
@@ -111,11 +114,11 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     int w = bar->width;
     int h = bar->height;
     double cy = h / 2.0;
-    double font_sz = 12;
+    double font_sz = 14;
     double section_gap = 18;
 
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_rgba(cr, 0.07, 0.07, 0.10, 0.92);
+    cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
     cairo_paint(cr);
 
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
@@ -153,7 +156,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     rx -= 5;
 
     {
-        double bw = 16, bh = 8;
+        double bw = 18, bh = 9;
         double ix = rx - bw - 2, iy = cy;
         cairo_set_line_width(cr, 1.0);
         cairo_set_source_rgb(cr, 0.6, 0.6, 0.6);
@@ -188,42 +191,42 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     rx -= 5;
 
     {
-        double ix = rx - 12, iy = cy;
+        double ix = rx - 14, iy = cy;
         cairo_set_source_rgb(cr, 0.88, 0.88, 0.90);
-        cairo_rectangle(cr, ix, iy - 2.5, 3.5, 5);
+        cairo_rectangle(cr, ix, iy - 3, 4, 6);
         cairo_fill(cr);
-        cairo_move_to(cr, ix + 3.5, iy - 2.5);
-        cairo_line_to(cr, ix + 7.5, iy - 5);
-        cairo_line_to(cr, ix + 7.5, iy + 5);
-        cairo_line_to(cr, ix + 3.5, iy + 2.5);
+        cairo_move_to(cr, ix + 4, iy - 3);
+        cairo_line_to(cr, ix + 8.5, iy - 6);
+        cairo_line_to(cr, ix + 8.5, iy + 6);
+        cairo_line_to(cr, ix + 4, iy + 3);
         cairo_close_path(cr);
         cairo_fill(cr);
         if (bar->volume->muted) {
-            cairo_set_line_width(cr, 1.2);
-            cairo_move_to(cr, ix + 9, iy - 3);
-            cairo_line_to(cr, ix + 14, iy + 3);
-            cairo_move_to(cr, ix + 14, iy - 3);
-            cairo_line_to(cr, ix + 9, iy + 3);
+            cairo_set_line_width(cr, 1.4);
+            cairo_move_to(cr, ix + 10, iy - 4);
+            cairo_line_to(cr, ix + 16, iy + 4);
+            cairo_move_to(cr, ix + 16, iy - 4);
+            cairo_line_to(cr, ix + 10, iy + 4);
             cairo_stroke(cr);
         } else {
-            cairo_set_line_width(cr, 1.0);
+            cairo_set_line_width(cr, 1.2);
             if (vol > 33) {
-                cairo_arc(cr, ix + 8.5, iy, 3.5, -M_PI/4, M_PI/4);
+                cairo_arc(cr, ix + 9.5, iy, 4, -M_PI/4, M_PI/4);
                 cairo_stroke(cr);
             }
             if (vol > 66) {
-                cairo_arc(cr, ix + 8.5, iy, 6, -M_PI/4, M_PI/4);
+                cairo_arc(cr, ix + 9.5, iy, 7, -M_PI/4, M_PI/4);
                 cairo_stroke(cr);
             }
         }
         rx = ix - section_gap;
     }
 
-    // Workspace indicators — neutral colors
+    // Workspace indicators — neutral colors, right-to-left before icons
     for (int i = bar->workspace_mgr->workspace_count - 1; i >= 0 && i < 8; i--) {
         if (bar->workspace_mgr->workspaces[i].state == WORKSPACE_ACTIVE) {
             cairo_set_source_rgb(cr, 0.80, 0.80, 0.82);
-            double rw = 24, rh = 4, radius = 2;
+            double rw = 26, rh = 5, radius = 2.5;
             rx -= rw;
             double ry = cy - rh / 2.0;
             cairo_new_sub_path(cr);
@@ -237,9 +240,74 @@ static void render_content(struct bar *bar, cairo_t *cr) {
         } else {
             cairo_set_source_rgb(cr, 0.40, 0.40, 0.45);
             rx -= 7;
-            cairo_arc(cr, rx + 3, cy, 3, 0, 2 * M_PI);
+            cairo_arc(cr, rx + 3.5, cy, 3.5, 0, 2 * M_PI);
             cairo_fill(cr);
             rx -= 10;
+        }
+    }
+
+    // Running applications (left side, sorted by focus order)
+    {
+        double lx = 10;
+        double icon_draw_sz = h - 10;
+        double icon_gap = 4;
+
+        for (int si = 0; si < bar->toplevel_mgr->sorted_count; si++) {
+            int idx = bar->toplevel_mgr->sorted_indices[si];
+            struct toplevel_info *tl = &bar->toplevel_mgr->toplevels[idx];
+            if (!tl->app_id[0] && !tl->title[0]) continue;
+            if (lx + icon_draw_sz > rx - 20) break;
+
+            tl->render_x = lx;
+            tl->render_w = icon_draw_sz;
+
+            if (tl->activated) {
+                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12);
+                double pad = 2;
+                double r = 3;
+                double bx = lx - pad, by = (h - icon_draw_sz) / 2.0 - pad;
+                double bw = icon_draw_sz + 2*pad, bh = icon_draw_sz + 2*pad;
+                cairo_new_sub_path(cr);
+                cairo_arc(cr, bx + bw - r, by + r, r, -M_PI/2, 0);
+                cairo_arc(cr, bx + bw - r, by + bh - r, r, 0, M_PI/2);
+                cairo_arc(cr, bx + r, by + bh - r, r, M_PI/2, M_PI);
+                cairo_arc(cr, bx + r, by + r, r, M_PI, 3*M_PI/2);
+                cairo_close_path(cr);
+                cairo_fill(cr);
+            }
+
+            if (tl->icon) {
+                int iw = cairo_image_surface_get_width(tl->icon);
+                double scale = icon_draw_sz / iw;
+                cairo_save(cr);
+                cairo_translate(cr, lx, (h - icon_draw_sz) / 2.0);
+                cairo_scale(cr, scale, scale);
+                cairo_set_source_surface(cr, tl->icon, 0, 0);
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+                cairo_paint(cr);
+                cairo_restore(cr);
+            } else {
+                const char *label = tl->app_id[0] ? tl->app_id : tl->title;
+                char initial[4] = {0};
+                initial[0] = (label[0] >= 'a' && label[0] <= 'z')
+                    ? label[0] - 32 : label[0];
+
+                cairo_set_source_rgb(cr, 0.20, 0.20, 0.24);
+                double r = icon_draw_sz / 2.0;
+                cairo_arc(cr, lx + r, cy, r, 0, 2 * M_PI);
+                cairo_fill(cr);
+
+                cairo_set_source_rgb(cr, 0.75, 0.75, 0.78);
+                cairo_set_font_size(cr, icon_draw_sz * 0.55);
+                cairo_text_extents_t ie;
+                cairo_text_extents(cr, initial, &ie);
+                cairo_move_to(cr, lx + r - ie.width/2 - ie.x_bearing,
+                              cy - ie.height/2 - ie.y_bearing);
+                cairo_show_text(cr, initial);
+                cairo_set_font_size(cr, font_sz);
+            }
+
+            lx += icon_draw_sz + icon_gap;
         }
     }
 }
@@ -315,6 +383,120 @@ static const struct zwlr_layer_surface_v1_listener layer_listener = {
     .closed = layer_closed,
 };
 
+// Pointer events for click handling
+static void pointer_enter(void *data, struct wl_pointer *pointer,
+                          uint32_t serial, struct wl_surface *surface,
+                          wl_fixed_t sx, wl_fixed_t sy) {
+    (void)surface;
+    struct bar *bar = data;
+    bar->pointer_inside = true;
+    bar->pointer_x = wl_fixed_to_double(sx);
+    bar->pointer_y = wl_fixed_to_double(sy);
+
+    if (bar->cursor_theme && bar->cursor_surface) {
+        struct wl_cursor *cursor = wl_cursor_theme_get_cursor(bar->cursor_theme, "default");
+        if (!cursor) cursor = wl_cursor_theme_get_cursor(bar->cursor_theme, "left_ptr");
+        if (cursor && cursor->image_count > 0) {
+            struct wl_cursor_image *img = cursor->images[0];
+            struct wl_buffer *buf = wl_cursor_image_get_buffer(img);
+            wl_surface_attach(bar->cursor_surface, buf, 0, 0);
+            wl_surface_damage_buffer(bar->cursor_surface, 0, 0, img->width, img->height);
+            wl_surface_commit(bar->cursor_surface);
+            wl_pointer_set_cursor(pointer, serial, bar->cursor_surface,
+                                  img->hotspot_x / bar->scale, img->hotspot_y / bar->scale);
+        }
+    }
+}
+
+static void pointer_leave(void *data, struct wl_pointer *pointer,
+                          uint32_t serial, struct wl_surface *surface) {
+    (void)pointer; (void)serial; (void)surface;
+    struct bar *bar = data;
+    bar->pointer_inside = false;
+}
+
+static void pointer_motion(void *data, struct wl_pointer *pointer,
+                           uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
+    (void)pointer; (void)time;
+    struct bar *bar = data;
+    bar->pointer_x = wl_fixed_to_double(sx);
+    bar->pointer_y = wl_fixed_to_double(sy);
+}
+
+static void pointer_button(void *data, struct wl_pointer *pointer,
+                           uint32_t serial, uint32_t time, uint32_t button,
+                           uint32_t state) {
+    (void)pointer; (void)serial; (void)time;
+    struct bar *bar = data;
+
+    if (state != WL_POINTER_BUTTON_STATE_PRESSED) return;
+    if (button != 0x110) return;  // BTN_LEFT
+
+    if (!bar->toplevel_mgr || !bar->seat) return;
+
+    struct toplevel_info *tl = toplevel_at_x(bar->toplevel_mgr, bar->pointer_x);
+    if (tl && tl->handle) {
+        zwlr_foreign_toplevel_handle_v1_activate(tl->handle, bar->seat);
+    }
+}
+
+static void pointer_axis(void *data, struct wl_pointer *pointer,
+                         uint32_t time, uint32_t axis, wl_fixed_t value) {
+    (void)data; (void)pointer; (void)time; (void)axis; (void)value;
+}
+
+static void pointer_frame(void *data, struct wl_pointer *pointer) {
+    (void)data; (void)pointer;
+}
+
+static void pointer_axis_source(void *data, struct wl_pointer *pointer,
+                                uint32_t source) {
+    (void)data; (void)pointer; (void)source;
+}
+
+static void pointer_axis_stop(void *data, struct wl_pointer *pointer,
+                              uint32_t time, uint32_t axis) {
+    (void)data; (void)pointer; (void)time; (void)axis;
+}
+
+static void pointer_axis_discrete(void *data, struct wl_pointer *pointer,
+                                  uint32_t axis, int32_t discrete) {
+    (void)data; (void)pointer; (void)axis; (void)discrete;
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+    .enter = pointer_enter,
+    .leave = pointer_leave,
+    .motion = pointer_motion,
+    .button = pointer_button,
+    .axis = pointer_axis,
+    .frame = pointer_frame,
+    .axis_source = pointer_axis_source,
+    .axis_stop = pointer_axis_stop,
+    .axis_discrete = pointer_axis_discrete,
+};
+
+static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps) {
+    struct bar *bar = data;
+    if ((caps & WL_SEAT_CAPABILITY_POINTER) && !bar->pointer) {
+        bar->pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(bar->pointer, &pointer_listener, bar);
+    }
+    if (!(caps & WL_SEAT_CAPABILITY_POINTER) && bar->pointer) {
+        wl_pointer_destroy(bar->pointer);
+        bar->pointer = NULL;
+    }
+}
+
+static void seat_name(void *data, struct wl_seat *seat, const char *name) {
+    (void)data; (void)seat; (void)name;
+}
+
+static const struct wl_seat_listener seat_listener = {
+    .capabilities = seat_capabilities,
+    .name = seat_name,
+};
+
 struct bar *bar_create(void) {
     struct bar *bar = calloc(1, sizeof(*bar));
     if (!bar) return NULL;
@@ -348,10 +530,20 @@ struct bar *bar_create(void) {
         return NULL;
     }
 
+    if (bar->seat) {
+        wl_seat_add_listener(bar->seat, &seat_listener, bar);
+    }
+
     bar->workspace_mgr = workspace_manager_create(bar);
+    bar->toplevel_mgr = toplevel_manager_create(bar);
+    wl_display_roundtrip(bar->display);
+
     bar->battery = battery_create(bar);
     bar->volume = volume_create(bar);
     bar->clock = clock_create(bar);
+
+    bar->cursor_theme = wl_cursor_theme_load(NULL, 24 * bar->scale, bar->shm);
+    bar->cursor_surface = wl_compositor_create_surface(bar->compositor);
 
     bar->surface = wl_compositor_create_surface(bar->compositor);
 
@@ -379,10 +571,14 @@ void bar_destroy(struct bar *bar) {
     buffer_destroy(buffers[0]); buffers[0] = NULL;
     buffer_destroy(buffers[1]); buffers[1] = NULL;
 
+    if (bar->cursor_surface) wl_surface_destroy(bar->cursor_surface);
+    if (bar->cursor_theme) wl_cursor_theme_destroy(bar->cursor_theme);
+    if (bar->pointer) wl_pointer_destroy(bar->pointer);
     if (bar->layer_surface) zwlr_layer_surface_v1_destroy(bar->layer_surface);
     if (bar->surface) wl_surface_destroy(bar->surface);
     if (bar->layer_shell) zwlr_layer_shell_v1_destroy(bar->layer_shell);
     if (bar->shm) wl_shm_destroy(bar->shm);
+    if (bar->seat) wl_seat_destroy(bar->seat);
     if (bar->subcompositor) wl_subcompositor_destroy(bar->subcompositor);
     if (bar->compositor) wl_compositor_destroy(bar->compositor);
     if (bar->output) wl_output_destroy(bar->output);
@@ -390,7 +586,9 @@ void bar_destroy(struct bar *bar) {
     if (bar->clock) clock_destroy(bar->clock);
     if (bar->volume) volume_destroy(bar->volume);
     if (bar->battery) battery_destroy(bar->battery);
+    if (bar->toplevel_mgr) toplevel_manager_destroy(bar->toplevel_mgr);
     if (bar->workspace_mgr) workspace_manager_destroy(bar->workspace_mgr);
+    if (bar->toplevel_mgr_proto) zwlr_foreign_toplevel_manager_v1_stop(bar->toplevel_mgr_proto);
     if (bar->workspace_proto) ext_workspace_manager_v1_stop(bar->workspace_proto);
 
     registry_fini(bar);

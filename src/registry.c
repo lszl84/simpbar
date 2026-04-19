@@ -2,6 +2,7 @@
 #include "bar.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "ext-workspace-v1-client-protocol.h"
+#include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +17,11 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
         bar->subcompositor = wl_registry_bind(registry, id, &wl_subcompositor_interface, 1);
     } else if (strcmp(interface, "wl_shm") == 0) {
         bar->shm = wl_registry_bind(registry, id, &wl_shm_interface, 1);
+    } else if (strcmp(interface, "wl_seat") == 0) {
+        if (!bar->seat) {
+            bar->seat = wl_registry_bind(registry, id, &wl_seat_interface,
+                                         version > 5 ? 5 : version);
+        }
     } else if (strcmp(interface, "zwlr_layer_shell_v1") == 0) {
         bar->layer_shell = wl_registry_bind(registry, id, &zwlr_layer_shell_v1_interface,
                                             version > 4 ? 4 : version);
@@ -26,6 +32,10 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "ext_workspace_manager_v1") == 0) {
         bar->workspace_proto = wl_registry_bind(registry, id,
                                                 &ext_workspace_manager_v1_interface, 1);
+    } else if (strcmp(interface, "zwlr_foreign_toplevel_manager_v1") == 0) {
+        bar->toplevel_mgr_proto = wl_registry_bind(registry, id,
+                                                    &zwlr_foreign_toplevel_manager_v1_interface,
+                                                    version > 3 ? 3 : version);
     }
 }
 

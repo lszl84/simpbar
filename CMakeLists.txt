@@ -6,8 +6,10 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED wayland-client)
+pkg_check_modules(WAYLAND_CURSOR REQUIRED wayland-cursor)
 pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols)
 pkg_check_modules(CAIRO REQUIRED cairo)
+pkg_check_modules(RSVG REQUIRED librsvg-2.0)
 
 set(PROTOCOL_DIR "${CMAKE_SOURCE_DIR}/protocol/unstable")
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
@@ -46,6 +48,8 @@ add_executable(simpbar
     src/bar.c
     src/registry.c
     src/workspace.c
+    src/toplevel.c
+    src/icon_loader.c
     src/battery.c
     src/volume.c
     src/clock.c
@@ -56,13 +60,17 @@ add_dependencies(simpbar protocols)
 
 target_include_directories(simpbar PRIVATE
     ${WAYLAND_CLIENT_INCLUDE_DIRS}
+    ${WAYLAND_CURSOR_INCLUDE_DIRS}
     ${CAIRO_INCLUDE_DIRS}
+    ${RSVG_INCLUDE_DIRS}
     ${GENERATED_DIR}
 )
 
 target_link_libraries(simpbar
     ${WAYLAND_CLIENT_LIBRARIES}
+    ${WAYLAND_CURSOR_LIBRARIES}
     ${CAIRO_LIBRARIES}
+    ${RSVG_LIBRARIES}
     m
     rt
 )

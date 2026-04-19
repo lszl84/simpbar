@@ -125,7 +125,6 @@ struct workspace_manager *workspace_manager_create(struct bar *bar) {
 
     if (bar->workspace_proto) {
         ext_workspace_manager_v1_add_listener(bar->workspace_proto, &mgr_listener, mgr);
-        wl_display_roundtrip(bar->display);
     } else {
         mgr->workspace_count = 4;
         mgr->workspaces[0].state = WORKSPACE_ACTIVE;
