@@ -1,0 +1,110 @@
+#+TITLE: simpbar
+#+AUTHOR: Lukasz Sromek
+#+DESCRIPTION: A minimal Wayland status bar
+
+* Overview
+
+~simpbar~ is a lightweight status bar for Wayland compositors. It uses =wlr-layer-shell= for positioning and =wl_shm= with Cairo for rendering. No GPU required -- pure CPU software rendering with HiDPI support.
+
+[[file:screenshot.png]]
+
+** Features
+
+- *Workspace indicators* (Zorin OS style) -- rounded bar for active workspace, grey dot for inactive. Wired to the compositor via =ext-workspace-v1= protocol.
+- *Battery monitor* -- reads from =/sys/class/power_supply/BAT*/=, with color-coded fill level and charging indicator (lightning bolt).
+- *Volume level* -- reads from PipeWire/PulseAudio via =wpctl=, shows speaker icon with sound wave arcs and mute indicator.
+- *Clock* -- date and time, updated every second.
+
+** Design
+
+- Pure C17, ~1000 lines total
+- No toolkit dependencies (no GTK, no Qt)
+- Renders with Cairo to =wl_shm= shared memory buffers
+- Double-buffered with proper =wl_buffer= release tracking
+- HiDPI-aware: renders at 2x scale with =cairo_surface_set_device_scale=
+- Redraws once per second (not per frame), so CPU usage stays under 0.5%
+
+* Dependencies
+
+- =wayland-client= -- Wayland client library
+- =wayland-protocols= -- protocol XML files
+- =wayland-scanner= -- code generator for protocol bindings
+- =cairo= -- 2D rendering
+- =cmake= >= 3.16
+- A compositor supporting =zwlr_layer_shell_v1= (Hyprland, Sway, labwc, river, etc.)
+- =wpctl= (from WirePlumber) for volume readout
+
+* Building
+
+#+BEGIN_SRC sh
+cmake -B build
+cmake --build build
+#+END_SRC
+
+* Running
+
+#+BEGIN_SRC sh
+./build/simpbar
+#+END_SRC
+
+To replace an existing bar:
+
+#+BEGIN_SRC sh
+pkill waybar    # or whatever bar you're running
+./build/simpbar &
+#+END_SRC
+
+To stop:
+
+#+BEGIN_SRC sh
+pkill simpbar
+#+END_SRC
+
+* Wayland Protocols
+
+simpbar uses two Wayland protocols, both bundled in =protocol/unstable/=:
+
+| Protocol                          | Purpose                                    |
+|-----------------------------------+--------------------------------------------|
+| =wlr-layer-shell-unstable-v1=    | Position the bar as a layer surface        |
+| =ext-workspace-v1=               | Track workspace state from the compositor  |
+
+Protocol bindings are generated at build time by =wayland-scanner=.
+
+* Architecture
+
+#+BEGIN_SRC
+src/
+  main.c          -- entry point, signal handling
+  bar.c           -- core: surface setup, shm buffers, Cairo rendering, event loop
+  bar.h           -- bar struct definition
+  registry.c      -- Wayland registry: binds globals (compositor, shm, layer-shell, workspace)
+  workspace.c     -- ext-workspace-v1 protocol listener, tracks workspace state
+  battery.c       -- reads /sys/class/power_supply for battery percentage and charge state
+  volume.c        -- reads volume via wpctl (PipeWire/PulseAudio)
+  clock.c         -- date/time formatting
+#+END_SRC
+
+The rendering pipeline:
+
+1. =poll()= on the Wayland fd with a 1-second timeout
+2. On timeout or Wayland event, update clock/battery/volume state
+3. Acquire a free =wl_shm= buffer (double-buffered)
+4. Render with Cairo: background, workspace dots, icons, text
+5. =wl_surface_attach= + =wl_surface_damage_buffer= + =wl_surface_commit=
+6. Buffer is marked busy until the compositor sends =wl_buffer.release=
+
+* Configuration
+
+Currently compile-time only. Key constants in =bar.c=:
+
+| Constant       | Default | Description         |
+|----------------+---------+---------------------|
+| =BAR_HEIGHT=   |      28 | Bar height in px    |
+| =bar->scale=   |       2 | HiDPI scale factor  |
+
+Anchor is set to =BOTTOM | LEFT | RIGHT= for a full-width bottom bar.
+
+* License
+
+Public domain. Do whatever you want with it.
