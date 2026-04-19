@@ -105,4 +105,4 @@ Anchor is set to =BOTTOM | LEFT | RIGHT= for a full-width bottom bar.
 
 * License
 
-Public domain. Do whatever you want with it.
+Licensed under the Apache License, Version 2.0. See [[./LICENSE]] for details.
