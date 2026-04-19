@@ -1,5 +1,6 @@
 #include "toplevel.h"
 #include "icon_loader.h"
+#include "workspace.h"
 #include "bar.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 
@@ -67,23 +68,46 @@ static void handle_state(void *data, struct zwlr_foreign_toplevel_handle_v1 *han
 
     bool was_activated = tl->activated;
     tl->activated = false;
+    tl->minimized = false;
 
     uint32_t *s;
     wl_array_for_each(s, state) {
         if (*s == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED)
             tl->activated = true;
+        if (*s == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED)
+            tl->minimized = true;
     }
 
+    /* When a toplevel becomes activated, it must be on the
+       currently visible workspace. Record that workspace index. */
     if (tl->activated && !was_activated) {
         tl->focus_seq = ++mgr->focus_counter;
+        /* Snap this toplevel to the active workspace */
+        struct workspace_manager *wm = mgr->bar->workspace_mgr;
+        for (int i = 0; i < wm->workspace_count; i++) {
+            if (wm->workspaces[i].state == WORKSPACE_ACTIVE) {
+                tl->workspace_idx = i;
+                break;
+            }
+        }
     }
+
+    toplevel_manager_sort(mgr);
+    bar_redraw(mgr->bar);
 }
 
 static void handle_done(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle) {
-    (void)handle;
+    (void)data; (void)handle;
+    /* Sort/redo is already done in handle_state, 
+       only redo if we haven't loaded the icon yet */
     struct toplevel_manager *mgr = data;
-    toplevel_manager_sort(mgr);
-    bar_redraw(mgr->bar);
+    struct toplevel_info *tl = find_by_handle(mgr, handle);
+    if (tl && !tl->icon_loaded && tl->app_id[0]) {
+        tl->icon = icon_load(tl->app_id, mgr->icon_size);
+        tl->icon_loaded = true;
+        toplevel_manager_sort(mgr);
+        bar_redraw(mgr->bar);
+    }
 }
 
 static void handle_closed(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle) {
@@ -130,6 +154,7 @@ static void mgr_toplevel(void *data,
     memset(tl, 0, sizeof(*tl));
     tl->handle = handle;
     tl->focus_seq = 0;
+    tl->workspace_idx = -1;  /* unknown workspace */
     mgr->count++;
 
     zwlr_foreign_toplevel_handle_v1_add_listener(handle, &handle_listener, mgr);
@@ -148,8 +173,26 @@ static const struct zwlr_foreign_toplevel_manager_v1_listener mgr_listener = {
 
 void toplevel_manager_sort(struct toplevel_manager *mgr) {
     mgr->sorted_count = 0;
+    int active_ws = -1;
+    struct workspace_manager *wm = mgr->bar->workspace_mgr;
+    for (int i = 0; i < wm->workspace_count; i++) {
+        if (wm->workspaces[i].state == WORKSPACE_ACTIVE) {
+            active_ws = i;
+            break;
+        }
+    }
+
     for (int i = 0; i < mgr->count; i++) {
-        if (mgr->toplevels[i].output_count > 0)
+        /* Include a toplevel if:
+           - it's on the active workspace, OR
+           - we don't know its workspace yet (workspace_idx == -1)
+             AND it has output_count > 0 (visible on this output)
+           - and it's not minimized */
+        struct toplevel_info *tl = &mgr->toplevels[i];
+        bool visible = true;
+        if (tl->minimized) visible = false;
+        else if (tl->workspace_idx >= 0 && tl->workspace_idx != active_ws) visible = false;
+        if (visible)
             mgr->sorted_indices[mgr->sorted_count++] = i;
     }
 }

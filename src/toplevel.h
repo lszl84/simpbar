@@ -16,7 +16,9 @@ struct toplevel_info {
     cairo_surface_t *icon;
     bool icon_loaded;
     bool activated;
+    bool minimized;
     int output_count;
+    int workspace_idx;  /* -1 = unknown */
     uint64_t focus_seq;
     double render_x;
     double render_w;

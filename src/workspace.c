@@ -1,4 +1,5 @@
 #include "workspace.h"
+#include "toplevel.h"
 #include "bar.h"
 #include "ext-workspace-v1-client-protocol.h"
 
@@ -101,6 +102,9 @@ static void mgr_done(void *data, struct ext_workspace_manager_v1 *mgr_proto) {
     struct workspace_manager *mgr = data;
     if (mgr->dirty) {
         mgr->dirty = false;
+        /* Re-sort toplevels since the active workspace changed */
+        if (mgr->bar->toplevel_mgr)
+            toplevel_manager_sort(mgr->bar->toplevel_mgr);
         bar_redraw(mgr->bar);
     }
 }
