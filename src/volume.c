@@ -4,9 +4,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <pipewire/pipewire.h>
 #include <spa/param/param.h>
+
+/* How long the transient volume pill stays on screen after the last change. */
+#define VOLUME_VISIBLE_MS 1500
+
+static int64_t monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 struct volume_node {
     struct volume *vol;
@@ -198,9 +208,25 @@ bool volume_dispatch(struct volume *vol) {
         int prev_level = vol->level;
         bool prev_muted = vol->muted;
         volume_update(vol);
-        return vol->level != prev_level || vol->muted != prev_muted;
+        bool changed = vol->level != prev_level || vol->muted != prev_muted;
+        if (changed) {
+            vol->visible_until_ms = monotonic_ms() + VOLUME_VISIBLE_MS;
+        }
+        return changed;
     }
     return false;
+}
+
+bool volume_visible(const struct volume *vol) {
+    if (!vol) return false;
+    return vol->visible_until_ms > monotonic_ms();
+}
+
+int volume_remaining_ms(const struct volume *vol) {
+    if (!vol) return -1;
+    int64_t remaining = vol->visible_until_ms - monotonic_ms();
+    if (remaining <= 0) return -1;
+    return (int)remaining;
 }
 
 void volume_render(struct volume *vol) { (void)vol; }

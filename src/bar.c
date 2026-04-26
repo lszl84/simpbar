@@ -162,7 +162,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     double br, bg, bb;
     if (pct < 10)      { br = 0.90; bg = 0.30; bb = 0.30; }
     else if (pct < 30) { br = 0.85; bg = 0.75; bb = 0.30; }
-    else               { br = 0.30; bg = 0.80; bb = 0.30; }
+    else               { br = 0.88; bg = 0.88; bb = 0.90; }
     cairo_set_source_rgb(cr, br, bg, bb);
     cairo_move_to(cr, rx, text_y);
     cairo_show_text(cr, buf);
@@ -193,16 +193,8 @@ static void render_content(struct bar *bar, cairo_t *cr) {
         rx = ix - section_gap;
     }
 
-    // Volume icon + text
+    // Volume icon (level shown transiently in the center on change)
     int vol = bar->volume->level;
-    snprintf(buf, sizeof(buf), "%d%%", vol);
-    cairo_text_extents(cr, buf, &ext);
-    rx -= ext.width;
-    cairo_set_source_rgb(cr, 0.88, 0.88, 0.90);
-    cairo_move_to(cr, rx, text_y);
-    cairo_show_text(cr, buf);
-    rx -= 5;
-
     {
         double ix = rx - 14, iy = cy;
         cairo_set_source_rgb(cr, 0.88, 0.88, 0.90);
@@ -235,46 +227,96 @@ static void render_content(struct bar *bar, cairo_t *cr) {
         rx = ix - section_gap;
     }
 
-    // Brightness sun + perceptual pill — transient, centered on the bar
-    if (backlight_visible(bar->backlight)) {
-        double frac = backlight_perceptual_fraction(bar->backlight);
+    // Centered transient indicators (brightness, volume) — appear on change
+    {
+        bool bl_vis  = backlight_visible(bar->backlight);
+        bool vol_vis = volume_visible(bar->volume);
+        if (bl_vis || vol_vis) {
+            double icon_w = 14, gap = 6, pw = 46, ph = 6, pr = ph / 2.0;
+            double widget_w = icon_w + gap + pw;
+            double inter_gap = 18;
+            double total = widget_w + (bl_vis && vol_vis ? widget_w + inter_gap : 0);
+            double bx = (w - total) / 2.0;
 
-        double icon_w = 14, gap = 6, pw = 46, ph = 6, pr = ph / 2.0;
-        double total = icon_w + gap + pw;
-        double bx = (w - total) / 2.0;
+            if (bl_vis) {
+                double frac = backlight_perceptual_fraction(bar->backlight);
+                double sx = bx + 7, iy = cy;
+                cairo_set_source_rgb(cr, 0.88, 0.88, 0.90);
+                cairo_arc(cr, sx, iy, 3.0, 0, 2 * M_PI);
+                cairo_fill(cr);
+                cairo_set_line_width(cr, 1.2);
+                cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+                for (int i = 0; i < 8; i++) {
+                    double a = i * (M_PI / 4.0);
+                    double r0 = 4.5, r1 = 6.5;
+                    cairo_move_to(cr, sx + cos(a) * r0, iy + sin(a) * r0);
+                    cairo_line_to(cr, sx + cos(a) * r1, iy + sin(a) * r1);
+                }
+                cairo_stroke(cr);
 
-        double sx = bx + 7, iy = cy;
-        cairo_set_source_rgb(cr, 0.88, 0.88, 0.90);
-        cairo_arc(cr, sx, iy, 3.0, 0, 2 * M_PI);
-        cairo_fill(cr);
-        cairo_set_line_width(cr, 1.2);
-        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-        for (int i = 0; i < 8; i++) {
-            double a = i * (M_PI / 4.0);
-            double r0 = 4.5, r1 = 6.5;
-            cairo_move_to(cr, sx + cos(a) * r0, iy + sin(a) * r0);
-            cairo_line_to(cr, sx + cos(a) * r1, iy + sin(a) * r1);
-        }
-        cairo_stroke(cr);
+                double px = bx + icon_w + gap;
+                double py = cy - ph / 2.0;
+                cairo_set_source_rgba(cr, 0.88, 0.88, 0.90, 0.30);
+                cairo_new_sub_path(cr);
+                cairo_arc(cr, px + pw - pr, py + pr, pr, -M_PI/2, M_PI/2);
+                cairo_arc(cr, px + pr,      py + pr, pr,  M_PI/2, 3*M_PI/2);
+                cairo_close_path(cr);
+                cairo_fill(cr);
 
-        double px = bx + icon_w + gap;
-        double py = cy - ph / 2.0;
-        cairo_set_source_rgba(cr, 0.88, 0.88, 0.90, 0.30);
-        cairo_new_sub_path(cr);
-        cairo_arc(cr, px + pw - pr, py + pr, pr, -M_PI/2, M_PI/2);
-        cairo_arc(cr, px + pr,      py + pr, pr,  M_PI/2, 3*M_PI/2);
-        cairo_close_path(cr);
-        cairo_fill(cr);
+                double fw = pw * frac;
+                if (fw > 0) {
+                    if (fw < ph) fw = ph;
+                    cairo_set_source_rgb(cr, 0.95, 0.95, 0.97);
+                    cairo_new_sub_path(cr);
+                    cairo_arc(cr, px + fw - pr, py + pr, pr, -M_PI/2, M_PI/2);
+                    cairo_arc(cr, px + pr,      py + pr, pr,  M_PI/2, 3*M_PI/2);
+                    cairo_close_path(cr);
+                    cairo_fill(cr);
+                }
+                bx += widget_w + inter_gap;
+            }
 
-        double fw = pw * frac;
-        if (fw > 0) {
-            if (fw < ph) fw = ph;
-            cairo_set_source_rgb(cr, 0.95, 0.95, 0.97);
-            cairo_new_sub_path(cr);
-            cairo_arc(cr, px + fw - pr, py + pr, pr, -M_PI/2, M_PI/2);
-            cairo_arc(cr, px + pr,      py + pr, pr,  M_PI/2, 3*M_PI/2);
-            cairo_close_path(cr);
-            cairo_fill(cr);
+            if (vol_vis) {
+                double frac = bar->volume->muted ? 0.0 : (vol / 100.0);
+                double sx = bx, iy = cy;
+                cairo_set_source_rgb(cr, 0.88, 0.88, 0.90);
+                cairo_rectangle(cr, sx, iy - 3, 4, 6);
+                cairo_fill(cr);
+                cairo_move_to(cr, sx + 4, iy - 3);
+                cairo_line_to(cr, sx + 8.5, iy - 6);
+                cairo_line_to(cr, sx + 8.5, iy + 6);
+                cairo_line_to(cr, sx + 4, iy + 3);
+                cairo_close_path(cr);
+                cairo_fill(cr);
+                if (bar->volume->muted) {
+                    cairo_set_line_width(cr, 1.4);
+                    cairo_move_to(cr, sx + 10, iy - 4);
+                    cairo_line_to(cr, sx + 16, iy + 4);
+                    cairo_move_to(cr, sx + 16, iy - 4);
+                    cairo_line_to(cr, sx + 10, iy + 4);
+                    cairo_stroke(cr);
+                }
+
+                double px = bx + icon_w + gap;
+                double py = cy - ph / 2.0;
+                cairo_set_source_rgba(cr, 0.88, 0.88, 0.90, 0.30);
+                cairo_new_sub_path(cr);
+                cairo_arc(cr, px + pw - pr, py + pr, pr, -M_PI/2, M_PI/2);
+                cairo_arc(cr, px + pr,      py + pr, pr,  M_PI/2, 3*M_PI/2);
+                cairo_close_path(cr);
+                cairo_fill(cr);
+
+                double fw = pw * frac;
+                if (fw > 0) {
+                    if (fw < ph) fw = ph;
+                    cairo_set_source_rgb(cr, 0.95, 0.95, 0.97);
+                    cairo_new_sub_path(cr);
+                    cairo_arc(cr, px + fw - pr, py + pr, pr, -M_PI/2, M_PI/2);
+                    cairo_arc(cr, px + pr,      py + pr, pr,  M_PI/2, 3*M_PI/2);
+                    cairo_close_path(cr);
+                    cairo_fill(cr);
+                }
+            }
         }
     }
 
@@ -689,6 +731,7 @@ int bar_run(struct bar *bar) {
     if (timer_fd >= 0) { pfds[nfds].fd = timer_fd; pfds[nfds].events = POLLIN; idx[SRC_TIMER] = nfds++; }
 
     bool bl_was_visible = false;
+    bool vol_was_visible = false;
 
     while (bar->running) {
         while (wl_display_prepare_read(bar->display) != 0) {
@@ -696,11 +739,16 @@ int bar_run(struct bar *bar) {
         }
         wl_display_flush(bar->display);
 
-        /* Wake at the indicator's hide deadline so it disappears promptly. */
+        /* Wake at the earliest indicator hide deadline so it disappears promptly. */
         int poll_timeout = -1;
         if (bl_was_visible) {
             int rem = backlight_remaining_ms(bar->backlight);
             poll_timeout = rem >= 0 ? rem : 0;
+        }
+        if (vol_was_visible) {
+            int rem = volume_remaining_ms(bar->volume);
+            int t = rem >= 0 ? rem : 0;
+            if (poll_timeout < 0 || t < poll_timeout) poll_timeout = t;
         }
 
         int n = poll(pfds, nfds, poll_timeout);
@@ -741,13 +789,16 @@ int bar_run(struct bar *bar) {
             }
         }
 
-        /* If the brightness indicator just appeared or disappeared (e.g. its
+        /* If a transient indicator just appeared or disappeared (e.g. its
          * hide timeout elapsed), redraw to reflect the change. */
-        bool bl_visible_now = backlight_visible(bar->backlight);
-        if (bl_visible_now != bl_was_visible && bar->configured) {
+        bool bl_visible_now  = backlight_visible(bar->backlight);
+        bool vol_visible_now = volume_visible(bar->volume);
+        if ((bl_visible_now != bl_was_visible ||
+             vol_visible_now != vol_was_visible) && bar->configured) {
             render_frame(bar);
         }
         bl_was_visible = bl_visible_now;
+        vol_was_visible = vol_visible_now;
     }
 
     if (timer_fd >= 0) close(timer_fd);
