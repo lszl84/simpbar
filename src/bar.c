@@ -4,6 +4,7 @@
 #include "toplevel.h"
 #include "battery.h"
 #include "volume.h"
+#include "backlight.h"
 #include "clock.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "ext-workspace-v1-client-protocol.h"
@@ -158,8 +159,11 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     snprintf(buf, sizeof(buf), "%d%%", pct);
     cairo_text_extents(cr, buf, &ext);
     rx -= ext.width;
-    double g = pct / 100.0;
-    cairo_set_source_rgb(cr, 0.3 + (1.0-g)*0.6, 0.3 + g*0.5, 0.3);
+    double br, bg, bb;
+    if (pct < 10)      { br = 0.90; bg = 0.30; bb = 0.30; }
+    else if (pct < 30) { br = 0.85; bg = 0.75; bb = 0.30; }
+    else               { br = 0.30; bg = 0.80; bb = 0.30; }
+    cairo_set_source_rgb(cr, br, bg, bb);
     cairo_move_to(cr, rx, text_y);
     cairo_show_text(cr, buf);
     rx -= 5;
@@ -173,8 +177,8 @@ static void render_content(struct bar *bar, cairo_t *cr) {
         cairo_stroke(cr);
         cairo_rectangle(cr, ix + bw, iy - 1.5, 2, 3);
         cairo_fill(cr);
-        double fill_w = (bw - 2) * g;
-        cairo_set_source_rgb(cr, 0.3 + (1.0-g)*0.6, 0.3 + g*0.5, 0.3);
+        double fill_w = (bw - 2) * (pct / 100.0);
+        cairo_set_source_rgb(cr, br, bg, bb);
         cairo_rectangle(cr, ix + 1, iy - bh/2 + 1, fill_w, bh - 2);
         cairo_fill(cr);
         if (bar->battery->state == BATTERY_CHARGING) {
@@ -229,6 +233,49 @@ static void render_content(struct bar *bar, cairo_t *cr) {
             }
         }
         rx = ix - section_gap;
+    }
+
+    // Brightness sun + perceptual pill — transient, centered on the bar
+    if (backlight_visible(bar->backlight)) {
+        double frac = backlight_perceptual_fraction(bar->backlight);
+
+        double icon_w = 14, gap = 6, pw = 46, ph = 6, pr = ph / 2.0;
+        double total = icon_w + gap + pw;
+        double bx = (w - total) / 2.0;
+
+        double sx = bx + 7, iy = cy;
+        cairo_set_source_rgb(cr, 0.88, 0.88, 0.90);
+        cairo_arc(cr, sx, iy, 3.0, 0, 2 * M_PI);
+        cairo_fill(cr);
+        cairo_set_line_width(cr, 1.2);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        for (int i = 0; i < 8; i++) {
+            double a = i * (M_PI / 4.0);
+            double r0 = 4.5, r1 = 6.5;
+            cairo_move_to(cr, sx + cos(a) * r0, iy + sin(a) * r0);
+            cairo_line_to(cr, sx + cos(a) * r1, iy + sin(a) * r1);
+        }
+        cairo_stroke(cr);
+
+        double px = bx + icon_w + gap;
+        double py = cy - ph / 2.0;
+        cairo_set_source_rgba(cr, 0.88, 0.88, 0.90, 0.30);
+        cairo_new_sub_path(cr);
+        cairo_arc(cr, px + pw - pr, py + pr, pr, -M_PI/2, M_PI/2);
+        cairo_arc(cr, px + pr,      py + pr, pr,  M_PI/2, 3*M_PI/2);
+        cairo_close_path(cr);
+        cairo_fill(cr);
+
+        double fw = pw * frac;
+        if (fw > 0) {
+            if (fw < ph) fw = ph;
+            cairo_set_source_rgb(cr, 0.95, 0.95, 0.97);
+            cairo_new_sub_path(cr);
+            cairo_arc(cr, px + fw - pr, py + pr, pr, -M_PI/2, M_PI/2);
+            cairo_arc(cr, px + pr,      py + pr, pr,  M_PI/2, 3*M_PI/2);
+            cairo_close_path(cr);
+            cairo_fill(cr);
+        }
     }
 
     // Workspace indicators — neutral colors, right-to-left before icons
@@ -380,6 +427,7 @@ static void layer_configure(void *data, struct zwlr_layer_surface_v1 *lsurf,
     clock_update(bar->clock);
     battery_update(bar->battery);
     volume_update(bar->volume);
+    backlight_update(bar->backlight);
     render_frame(bar);
 }
 
@@ -552,6 +600,7 @@ struct bar *bar_create(void) {
 
     bar->battery = battery_create(bar);
     bar->volume = volume_create(bar);
+    bar->backlight = backlight_create(bar);
     bar->clock = clock_create(bar);
 
     bar->cursor_theme = wl_cursor_theme_load(NULL, 24 * bar->scale, bar->shm);
@@ -596,6 +645,7 @@ void bar_destroy(struct bar *bar) {
     if (bar->output) wl_output_destroy(bar->output);
 
     if (bar->clock) clock_destroy(bar->clock);
+    if (bar->backlight) backlight_destroy(bar->backlight);
     if (bar->volume) volume_destroy(bar->volume);
     if (bar->battery) battery_destroy(bar->battery);
     if (bar->toplevel_mgr) toplevel_manager_destroy(bar->toplevel_mgr);
@@ -618,6 +668,7 @@ int bar_run(struct bar *bar) {
 
     int wl_fd = wl_display_get_fd(bar->display);
     int vol_fd = volume_get_fd(bar->volume);
+    int bl_fd = backlight_get_fd(bar->backlight);
     int timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     if (timer_fd >= 0) {
         struct itimerspec ts = {
@@ -627,17 +678,17 @@ int bar_run(struct bar *bar) {
         timerfd_settime(timer_fd, 0, &ts, NULL);
     }
 
-    struct pollfd pfds[3];
-    pfds[0].fd = wl_fd;    pfds[0].events = POLLIN;
-    pfds[1].fd = vol_fd;   pfds[1].events = POLLIN;
-    pfds[2].fd = timer_fd; pfds[2].events = POLLIN;
-    int nfds = 1 + (vol_fd >= 0 ? 1 : 0) + (timer_fd >= 0 ? 1 : 0);
-    /* Pack: if vol_fd is -1 but timer_fd valid, shift timer into slot 1. */
-    if (vol_fd < 0 && timer_fd >= 0) {
-        pfds[1] = pfds[2];
-    }
-    int timer_idx = (vol_fd >= 0) ? 2 : 1;
-    int vol_idx = (vol_fd >= 0) ? 1 : -1;
+    enum { SRC_WL = 0, SRC_VOL, SRC_BL, SRC_TIMER, SRC_COUNT };
+    struct pollfd pfds[SRC_COUNT];
+    int idx[SRC_COUNT] = { -1, -1, -1, -1 };
+    int nfds = 0;
+
+    pfds[nfds].fd = wl_fd; pfds[nfds].events = POLLIN; idx[SRC_WL] = nfds++;
+    if (vol_fd >= 0)   { pfds[nfds].fd = vol_fd;   pfds[nfds].events = POLLIN; idx[SRC_VOL]   = nfds++; }
+    if (bl_fd >= 0)    { pfds[nfds].fd = bl_fd;    pfds[nfds].events = POLLIN; idx[SRC_BL]    = nfds++; }
+    if (timer_fd >= 0) { pfds[nfds].fd = timer_fd; pfds[nfds].events = POLLIN; idx[SRC_TIMER] = nfds++; }
+
+    bool bl_was_visible = false;
 
     while (bar->running) {
         while (wl_display_prepare_read(bar->display) != 0) {
@@ -645,28 +696,41 @@ int bar_run(struct bar *bar) {
         }
         wl_display_flush(bar->display);
 
-        int n = poll(pfds, nfds, -1);
+        /* Wake at the indicator's hide deadline so it disappears promptly. */
+        int poll_timeout = -1;
+        if (bl_was_visible) {
+            int rem = backlight_remaining_ms(bar->backlight);
+            poll_timeout = rem >= 0 ? rem : 0;
+        }
+
+        int n = poll(pfds, nfds, poll_timeout);
         if (n < 0) {
             wl_display_cancel_read(bar->display);
             if (errno == EINTR) continue;
             break;
         }
 
-        if (pfds[0].revents & POLLIN) {
+        if (pfds[idx[SRC_WL]].revents & POLLIN) {
             if (wl_display_read_events(bar->display) < 0) break;
             wl_display_dispatch_pending(bar->display);
         } else {
             wl_display_cancel_read(bar->display);
         }
-        if (pfds[0].revents & (POLLERR | POLLHUP)) break;
+        if (pfds[idx[SRC_WL]].revents & (POLLERR | POLLHUP)) break;
 
-        if (vol_idx >= 0 && (pfds[vol_idx].revents & POLLIN)) {
+        if (idx[SRC_VOL] >= 0 && (pfds[idx[SRC_VOL]].revents & POLLIN)) {
             if (volume_dispatch(bar->volume) && bar->configured) {
                 render_frame(bar);
             }
         }
 
-        if (timer_fd >= 0 && (pfds[timer_idx].revents & POLLIN)) {
+        if (idx[SRC_BL] >= 0 && (pfds[idx[SRC_BL]].revents & POLLIN)) {
+            if (backlight_dispatch(bar->backlight) && bar->configured) {
+                render_frame(bar);
+            }
+        }
+
+        if (idx[SRC_TIMER] >= 0 && (pfds[idx[SRC_TIMER]].revents & POLLIN)) {
             uint64_t exp;
             ssize_t r = read(timer_fd, &exp, sizeof(exp));
             (void)r;
@@ -676,6 +740,14 @@ int bar_run(struct bar *bar) {
                 render_frame(bar);
             }
         }
+
+        /* If the brightness indicator just appeared or disappeared (e.g. its
+         * hide timeout elapsed), redraw to reflect the change. */
+        bool bl_visible_now = backlight_visible(bar->backlight);
+        if (bl_visible_now != bl_was_visible && bar->configured) {
+            render_frame(bar);
+        }
+        bl_was_visible = bl_visible_now;
     }
 
     if (timer_fd >= 0) close(timer_fd);

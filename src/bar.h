@@ -33,6 +33,7 @@ struct bar {
     struct toplevel_manager *toplevel_mgr;
     struct battery *battery;
     struct volume *volume;
+    struct backlight *backlight;
     struct clock *clock;
 
     int width;

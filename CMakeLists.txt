@@ -11,6 +11,7 @@ pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols)
 pkg_check_modules(CAIRO REQUIRED cairo)
 pkg_check_modules(RSVG REQUIRED librsvg-2.0)
 pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
+pkg_check_modules(UDEV REQUIRED libudev)
 
 set(PROTOCOL_DIR "${CMAKE_SOURCE_DIR}/protocol/unstable")
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
@@ -53,6 +54,7 @@ add_executable(simpbar
     src/icon_loader.c
     src/battery.c
     src/volume.c
+    src/backlight.c
     src/clock.c
     ${PROTOCOL_SOURCES}
 )
@@ -65,6 +67,7 @@ target_include_directories(simpbar PRIVATE
     ${CAIRO_INCLUDE_DIRS}
     ${RSVG_INCLUDE_DIRS}
     ${PIPEWIRE_INCLUDE_DIRS}
+    ${UDEV_INCLUDE_DIRS}
     ${GENERATED_DIR}
 )
 
@@ -74,6 +77,7 @@ target_link_libraries(simpbar
     ${CAIRO_LIBRARIES}
     ${RSVG_LIBRARIES}
     ${PIPEWIRE_LIBRARIES}
+    ${UDEV_LIBRARIES}
     m
     rt
 )
