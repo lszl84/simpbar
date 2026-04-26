@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <math.h>
 #include <sys/mman.h>
+#include <sys/timerfd.h>
 #include <cairo/cairo.h>
 
 #define BAR_HEIGHT 32
@@ -271,16 +272,13 @@ static void render_content(struct bar *bar, cairo_t *cr) {
             tl->render_w = icon_draw_sz;
 
             if (tl->activated) {
-                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12);
-                double pad = 2;
-                double r = 3;
-                double bx = lx - pad, by = (h - icon_draw_sz) / 2.0 - pad;
-                double bw = icon_draw_sz + 2*pad, bh = icon_draw_sz + 2*pad;
+                cairo_set_source_rgb(cr, 0.95, 0.95, 0.97);
+                double pw = 12, ph = 2.5, pr = ph / 2.0;
+                double px = lx + (icon_draw_sz - pw) / 2.0;
+                double py = h - ph - 1.5;
                 cairo_new_sub_path(cr);
-                cairo_arc(cr, bx + bw - r, by + r, r, -M_PI/2, 0);
-                cairo_arc(cr, bx + bw - r, by + bh - r, r, 0, M_PI/2);
-                cairo_arc(cr, bx + r, by + bh - r, r, M_PI/2, M_PI);
-                cairo_arc(cr, bx + r, by + r, r, M_PI, 3*M_PI/2);
+                cairo_arc(cr, px + pw - pr, py + pr, pr, -M_PI/2, M_PI/2);
+                cairo_arc(cr, px + pr, py + pr, pr, M_PI/2, 3*M_PI/2);
                 cairo_close_path(cr);
                 cairo_fill(cr);
             }
@@ -617,22 +615,70 @@ void bar_destroy(struct bar *bar) {
 
 int bar_run(struct bar *bar) {
     bar->running = 1;
-    time_t last_update = 0;
+
+    int wl_fd = wl_display_get_fd(bar->display);
+    int vol_fd = volume_get_fd(bar->volume);
+    int timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (timer_fd >= 0) {
+        struct itimerspec ts = {
+            .it_interval = { .tv_sec = 1, .tv_nsec = 0 },
+            .it_value    = { .tv_sec = 1, .tv_nsec = 0 },
+        };
+        timerfd_settime(timer_fd, 0, &ts, NULL);
+    }
+
+    struct pollfd pfds[3];
+    pfds[0].fd = wl_fd;    pfds[0].events = POLLIN;
+    pfds[1].fd = vol_fd;   pfds[1].events = POLLIN;
+    pfds[2].fd = timer_fd; pfds[2].events = POLLIN;
+    int nfds = 1 + (vol_fd >= 0 ? 1 : 0) + (timer_fd >= 0 ? 1 : 0);
+    /* Pack: if vol_fd is -1 but timer_fd valid, shift timer into slot 1. */
+    if (vol_fd < 0 && timer_fd >= 0) {
+        pfds[1] = pfds[2];
+    }
+    int timer_idx = (vol_fd >= 0) ? 2 : 1;
+    int vol_idx = (vol_fd >= 0) ? 1 : -1;
 
     while (bar->running) {
-        if (wl_display_dispatch(bar->display) < 0)
-            break;
+        while (wl_display_prepare_read(bar->display) != 0) {
+            wl_display_dispatch_pending(bar->display);
+        }
+        wl_display_flush(bar->display);
 
-        time_t now = time(NULL);
-        if (now != last_update && bar->configured) {
-            last_update = now;
-            clock_update(bar->clock);
-            battery_update(bar->battery);
-            volume_update(bar->volume);
-            render_frame(bar);
+        int n = poll(pfds, nfds, -1);
+        if (n < 0) {
+            wl_display_cancel_read(bar->display);
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        if (pfds[0].revents & POLLIN) {
+            if (wl_display_read_events(bar->display) < 0) break;
+            wl_display_dispatch_pending(bar->display);
+        } else {
+            wl_display_cancel_read(bar->display);
+        }
+        if (pfds[0].revents & (POLLERR | POLLHUP)) break;
+
+        if (vol_idx >= 0 && (pfds[vol_idx].revents & POLLIN)) {
+            if (volume_dispatch(bar->volume) && bar->configured) {
+                render_frame(bar);
+            }
+        }
+
+        if (timer_fd >= 0 && (pfds[timer_idx].revents & POLLIN)) {
+            uint64_t exp;
+            ssize_t r = read(timer_fd, &exp, sizeof(exp));
+            (void)r;
+            if (bar->configured) {
+                clock_update(bar->clock);
+                battery_update(bar->battery);
+                render_frame(bar);
+            }
         }
     }
 
+    if (timer_fd >= 0) close(timer_fd);
     return 0;
 }
 

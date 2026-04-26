@@ -10,7 +10,7 @@
 
 - *Workspace indicators* (Zorin OS style) -- rounded bar for active workspace, grey dot for inactive. Wired to the compositor via =ext-workspace-v1= protocol.
 - *Battery monitor* -- reads from =/sys/class/power_supply/BAT*/=, with color-coded fill level and charging indicator (lightning bolt).
-- *Volume level* -- reads from PipeWire/PulseAudio via =wpctl=, shows speaker icon with sound wave arcs and mute indicator.
+- *Volume level* -- subscribes to PipeWire directly via =libpipewire=, so changes are reflected instantly. Shows speaker icon with sound wave arcs and mute indicator.
 - *Clock* -- date and time, updated every second.
 
 ** Design
@@ -28,9 +28,16 @@
 - =wayland-protocols= -- protocol XML files
 - =wayland-scanner= -- code generator for protocol bindings
 - =cairo= -- 2D rendering
+- =librsvg-2.0= -- SVG rendering for app icons
+- =libpipewire-0.3= -- direct PipeWire client for instant volume updates
 - =cmake= >= 3.16
 - A compositor supporting =zwlr_layer_shell_v1= (Hyprland, Sway, labwc, river, etc.)
-- =wpctl= (from WirePlumber) for volume readout
+
+On Fedora:
+
+#+BEGIN_SRC sh
+sudo dnf install -y wayland-devel wayland-protocols-devel cairo-devel librsvg2-devel pipewire-devel cmake gcc
+#+END_SRC
 
 * Building
 
@@ -38,6 +45,18 @@
 cmake -B build
 cmake --build build
 #+END_SRC
+
+* Installing
+
+To install into =~/.local= (no sudo):
+
+#+BEGIN_SRC sh
+cmake -B build -DCMAKE_INSTALL_PREFIX=$HOME/.local
+cmake --build build
+cmake --install build
+#+END_SRC
+
+Make sure =~/.local/bin= is on your =PATH=. To install system-wide instead, omit =CMAKE_INSTALL_PREFIX= and run =sudo cmake --install build= (defaults to =/usr/local=).
 
 * Running
 
@@ -79,14 +98,14 @@ src/
   registry.c      -- Wayland registry: binds globals (compositor, shm, layer-shell, workspace)
   workspace.c     -- ext-workspace-v1 protocol listener, tracks workspace state
   battery.c       -- reads /sys/class/power_supply for battery percentage and charge state
-  volume.c        -- reads volume via wpctl (PipeWire/PulseAudio)
+  volume.c        -- libpipewire client; tracks default sink and pushes updates on change
   clock.c         -- date/time formatting
 #+END_SRC
 
 The rendering pipeline:
 
-1. =poll()= on the Wayland fd with a 1-second timeout
-2. On timeout or Wayland event, update clock/battery/volume state
+1. =poll()= on the Wayland fd, the PipeWire fd, and a 1-second timerfd
+2. On timer tick, update clock/battery; on PipeWire events, refresh volume immediately
 3. Acquire a free =wl_shm= buffer (double-buffered)
 4. Render with Cairo: background, workspace dots, icons, text
 5. =wl_surface_attach= + =wl_surface_damage_buffer= + =wl_surface_commit=

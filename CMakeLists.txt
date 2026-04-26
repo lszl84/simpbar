@@ -10,6 +10,7 @@ pkg_check_modules(WAYLAND_CURSOR REQUIRED wayland-cursor)
 pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols)
 pkg_check_modules(CAIRO REQUIRED cairo)
 pkg_check_modules(RSVG REQUIRED librsvg-2.0)
+pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
 
 set(PROTOCOL_DIR "${CMAKE_SOURCE_DIR}/protocol/unstable")
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
@@ -63,6 +64,7 @@ target_include_directories(simpbar PRIVATE
     ${WAYLAND_CURSOR_INCLUDE_DIRS}
     ${CAIRO_INCLUDE_DIRS}
     ${RSVG_INCLUDE_DIRS}
+    ${PIPEWIRE_INCLUDE_DIRS}
     ${GENERATED_DIR}
 )
 
@@ -71,6 +73,7 @@ target_link_libraries(simpbar
     ${WAYLAND_CURSOR_LIBRARIES}
     ${CAIRO_LIBRARIES}
     ${RSVG_LIBRARIES}
+    ${PIPEWIRE_LIBRARIES}
     m
     rt
 )
