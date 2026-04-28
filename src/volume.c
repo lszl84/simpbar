@@ -1,6 +1,7 @@
 #include "volume.h"
 #include "bar.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,10 @@
 
 /* How long the transient volume pill stays on screen after the last change. */
 #define VOLUME_VISIBLE_MS 1500
+
+/* Reconnect backoff: start at 500ms, double on each failure, cap at 30s. */
+#define RECONNECT_INITIAL_MS 500
+#define RECONNECT_MAX_MS     30000
 
 static int64_t monotonic_ms(void) {
     struct timespec ts;
@@ -31,10 +36,18 @@ struct volume_pw {
     struct pw_context *context;
     struct pw_core *core;
     struct pw_registry *registry;
+    struct spa_hook core_listener;
     struct spa_hook registry_listener;
     struct volume_node *nodes;
+    struct spa_source *retry_timer;
+    int retry_delay_ms;
+    bool disconnected;
     bool dirty;
 };
+
+static int volume_pw_connect(struct volume *vol);
+static void volume_pw_teardown(struct volume *vol);
+static void volume_pw_schedule_retry(struct volume *vol);
 
 static void on_node_param(void *data, int seq, uint32_t id,
                           uint32_t index, uint32_t next,
@@ -107,6 +120,108 @@ static const struct pw_registry_events registry_events = {
     .global = on_registry_global,
 };
 
+static void on_core_error(void *data, uint32_t id, int seq, int res,
+                          const char *message) {
+    (void)seq;
+    struct volume *vol = data;
+    /* id == PW_ID_CORE with -EPIPE is the canonical "daemon went away" signal. */
+    if (id == PW_ID_CORE && res == -EPIPE) {
+        vol->pw->disconnected = true;
+    } else {
+        fprintf(stderr, "simpbar: pipewire error id:%u res:%d: %s\n",
+                id, res, message ? message : "");
+    }
+}
+
+static const struct pw_core_events core_events = {
+    PW_VERSION_CORE_EVENTS,
+    .error = on_core_error,
+};
+
+static void on_retry_timer(void *data, uint64_t expirations) {
+    (void)expirations;
+    struct volume *vol = data;
+    struct volume_pw *pw = vol->pw;
+
+    /* Disarm; we'll re-arm only if the connect attempt fails. */
+    struct timespec zero = {0, 0};
+    pw_loop_update_timer(pw_main_loop_get_loop(pw->loop),
+                         pw->retry_timer, &zero, &zero, false);
+
+    if (volume_pw_connect(vol) == 0) {
+        pw->retry_delay_ms = RECONNECT_INITIAL_MS;
+        /* Force a refresh — we likely missed events while disconnected. */
+        pw->dirty = true;
+    } else {
+        volume_pw_schedule_retry(vol);
+    }
+}
+
+static void volume_pw_schedule_retry(struct volume *vol) {
+    struct volume_pw *pw = vol->pw;
+    int delay = pw->retry_delay_ms;
+    pw->retry_delay_ms *= 2;
+    if (pw->retry_delay_ms > RECONNECT_MAX_MS) pw->retry_delay_ms = RECONNECT_MAX_MS;
+
+    struct timespec value = {
+        .tv_sec  = delay / 1000,
+        .tv_nsec = (delay % 1000) * 1000000L,
+    };
+    struct timespec interval = {0, 0};
+    pw_loop_update_timer(pw_main_loop_get_loop(pw->loop),
+                         pw->retry_timer, &value, &interval, false);
+}
+
+static int volume_pw_connect(struct volume *vol) {
+    struct volume_pw *pw = vol->pw;
+
+    pw->context = pw_context_new(pw_main_loop_get_loop(pw->loop), NULL, 0);
+    if (!pw->context) return -1;
+
+    pw->core = pw_context_connect(pw->context, NULL, 0);
+    if (!pw->core) {
+        pw_context_destroy(pw->context);
+        pw->context = NULL;
+        return -1;
+    }
+    pw_core_add_listener(pw->core, &pw->core_listener, &core_events, vol);
+
+    pw->registry = pw_core_get_registry(pw->core, PW_VERSION_REGISTRY, 0);
+    if (!pw->registry) {
+        spa_hook_remove(&pw->core_listener);
+        pw_core_disconnect(pw->core);
+        pw_context_destroy(pw->context);
+        pw->core = NULL;
+        pw->context = NULL;
+        return -1;
+    }
+    pw_registry_add_listener(pw->registry, &pw->registry_listener,
+                             &registry_events, vol);
+
+    pw->disconnected = false;
+    return 0;
+}
+
+static void volume_pw_teardown(struct volume *vol) {
+    struct volume_pw *pw = vol->pw;
+    while (pw->nodes) {
+        pw_proxy_destroy(pw->nodes->proxy);
+    }
+    if (pw->registry) {
+        pw_proxy_destroy((struct pw_proxy *)pw->registry);
+        pw->registry = NULL;
+    }
+    if (pw->core) {
+        spa_hook_remove(&pw->core_listener);
+        pw_core_disconnect(pw->core);
+        pw->core = NULL;
+    }
+    if (pw->context) {
+        pw_context_destroy(pw->context);
+        pw->context = NULL;
+    }
+}
+
 void volume_update(struct volume *vol) {
     FILE *fp = popen("wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null", "r");
     if (fp) {
@@ -135,32 +250,28 @@ static void volume_pw_init(struct volume *vol) {
     struct volume_pw *pw = calloc(1, sizeof(*pw));
     if (!pw) return;
     vol->pw = pw;
+    pw->retry_delay_ms = RECONNECT_INITIAL_MS;
 
     pw->loop = pw_main_loop_new(NULL);
-    if (!pw->loop) goto fail;
-
-    pw->context = pw_context_new(pw_main_loop_get_loop(pw->loop), NULL, 0);
-    if (!pw->context) goto fail;
-
-    pw->core = pw_context_connect(pw->context, NULL, 0);
-    if (!pw->core) {
-        fprintf(stderr, "simpbar: PipeWire connect failed; falling back to polling\n");
-        goto fail;
+    if (!pw->loop) {
+        free(pw);
+        vol->pw = NULL;
+        return;
     }
 
-    pw->registry = pw_core_get_registry(pw->core, PW_VERSION_REGISTRY, 0);
-    if (!pw->registry) goto fail;
+    pw->retry_timer = pw_loop_add_timer(pw_main_loop_get_loop(pw->loop),
+                                        on_retry_timer, vol);
+    if (!pw->retry_timer) {
+        pw_main_loop_destroy(pw->loop);
+        free(pw);
+        vol->pw = NULL;
+        return;
+    }
 
-    pw_registry_add_listener(pw->registry, &pw->registry_listener,
-                             &registry_events, vol);
-    return;
-
-fail:
-    if (pw->core) pw_core_disconnect(pw->core);
-    if (pw->context) pw_context_destroy(pw->context);
-    if (pw->loop) pw_main_loop_destroy(pw->loop);
-    free(pw);
-    vol->pw = NULL;
+    if (volume_pw_connect(vol) != 0) {
+        fprintf(stderr, "simpbar: PipeWire connect failed; will retry\n");
+        volume_pw_schedule_retry(vol);
+    }
 }
 
 struct volume *volume_create(struct bar *bar) {
@@ -178,12 +289,11 @@ struct volume *volume_create(struct bar *bar) {
 void volume_destroy(struct volume *vol) {
     if (!vol) return;
     if (vol->pw) {
-        while (vol->pw->nodes) {
-            pw_proxy_destroy(vol->pw->nodes->proxy);
+        volume_pw_teardown(vol);
+        if (vol->pw->retry_timer) {
+            pw_loop_destroy_source(pw_main_loop_get_loop(vol->pw->loop),
+                                   vol->pw->retry_timer);
         }
-        if (vol->pw->registry) pw_proxy_destroy((struct pw_proxy *)vol->pw->registry);
-        if (vol->pw->core) pw_core_disconnect(vol->pw->core);
-        if (vol->pw->context) pw_context_destroy(vol->pw->context);
         if (vol->pw->loop) pw_main_loop_destroy(vol->pw->loop);
         free(vol->pw);
         pw_deinit();
@@ -202,6 +312,14 @@ bool volume_dispatch(struct volume *vol) {
     pw_loop_enter(loop);
     pw_loop_iterate(loop, 0);
     pw_loop_leave(loop);
+
+    /* The error callback can't safely tear down the connection from inside
+     * iterate, so it just sets a flag. Handle the teardown + retry here. */
+    if (vol->pw->disconnected) {
+        vol->pw->disconnected = false;
+        volume_pw_teardown(vol);
+        volume_pw_schedule_retry(vol);
+    }
 
     if (vol->pw->dirty) {
         vol->pw->dirty = false;
