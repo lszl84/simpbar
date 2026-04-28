@@ -162,9 +162,8 @@ static const struct zwlr_foreign_toplevel_manager_v1_listener mgr_listener = {
 void toplevel_manager_sort(struct toplevel_manager *mgr) {
     mgr->sorted_count = 0;
     for (int i = 0; i < mgr->count; i++) {
-        struct toplevel_info *tl = &mgr->toplevels[i];
-        if (!tl->minimized)
-            mgr->sorted_indices[mgr->sorted_count++] = i;
+        /* Include all toplevels - minimized ones get rendered with reduced opacity */
+        mgr->sorted_indices[mgr->sorted_count++] = i;
     }
 }
 

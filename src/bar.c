@@ -372,6 +372,11 @@ static void render_content(struct bar *bar, cairo_t *cr) {
                 cairo_fill(cr);
             }
 
+            /* Reduced opacity for minimized windows */
+            if (tl->minimized) {
+                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.5);
+            }
+
             if (tl->icon) {
                 int iw = cairo_image_surface_get_width(tl->icon);
                 double scale = icon_draw_sz / iw;
@@ -380,7 +385,11 @@ static void render_content(struct bar *bar, cairo_t *cr) {
                 cairo_scale(cr, scale, scale);
                 cairo_set_source_surface(cr, tl->icon, 0, 0);
                 cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
-                cairo_paint(cr);
+                if (tl->minimized) {
+                    cairo_paint_with_alpha(cr, 0.5);
+                } else {
+                    cairo_paint(cr);
+                }
                 cairo_restore(cr);
             } else {
                 const char *label = tl->app_id[0] ? tl->app_id : tl->title;
