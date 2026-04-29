@@ -3,9 +3,20 @@
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "ext-workspace-v1-client-protocol.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
+#include "xdg-shell-client-protocol.h"
 
 #include <stdio.h>
 #include <string.h>
+
+static void xdg_wm_base_ping(void *data, struct xdg_wm_base *xdg_wm_base,
+                             uint32_t serial) {
+    (void)data;
+    xdg_wm_base_pong(xdg_wm_base, serial);
+}
+
+static const struct xdg_wm_base_listener xdg_wm_base_listener = {
+    .ping = xdg_wm_base_ping,
+};
 
 static void registry_handle_global(void *data, struct wl_registry *registry,
                                    uint32_t id, const char *interface, uint32_t version) {
@@ -36,6 +47,10 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
         bar->toplevel_mgr_proto = wl_registry_bind(registry, id,
                                                     &zwlr_foreign_toplevel_manager_v1_interface,
                                                     version > 3 ? 3 : version);
+    } else if (strcmp(interface, "xdg_wm_base") == 0) {
+        bar->xdg_wm_base = wl_registry_bind(registry, id, &xdg_wm_base_interface,
+                                            version > 3 ? 3 : version);
+        xdg_wm_base_add_listener(bar->xdg_wm_base, &xdg_wm_base_listener, bar);
     }
 }
 

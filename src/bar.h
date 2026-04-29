@@ -28,13 +28,16 @@ struct bar {
     struct wl_output *output;
     struct ext_workspace_manager_v1 *workspace_proto;
     struct zwlr_foreign_toplevel_manager_v1 *toplevel_mgr_proto;
+    struct xdg_wm_base *xdg_wm_base;
 
     struct workspace_manager *workspace_mgr;
     struct toplevel_manager *toplevel_mgr;
     struct battery *battery;
+    struct battery_history *battery_history;
     struct volume *volume;
     struct backlight *backlight;
     struct clock *clock;
+    struct popup *battery_popup;
 
     int width;
     int height;
@@ -46,6 +49,15 @@ struct bar {
     double pointer_x;
     double pointer_y;
     bool pointer_inside;
+
+    /* Battery icon hit rect (in surface coords) */
+    double battery_hit_x;
+    double battery_hit_y;
+    double battery_hit_w;
+    double battery_hit_h;
+
+    bool pointer_over_battery;
+    bool pointer_over_popup;
 };
 
 #endif

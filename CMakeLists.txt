@@ -13,10 +13,12 @@ pkg_check_modules(RSVG REQUIRED librsvg-2.0)
 pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
 pkg_check_modules(UDEV REQUIRED libudev)
 
-set(PROTOCOL_DIR "${CMAKE_SOURCE_DIR}/protocol/unstable")
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 
-file(GLOB PROTOCOL_FILES "${PROTOCOL_DIR}/*.xml")
+file(GLOB PROTOCOL_FILES
+    "${CMAKE_SOURCE_DIR}/protocol/unstable/*.xml"
+    "${CMAKE_SOURCE_DIR}/protocol/stable/*.xml"
+)
 
 set(PROTOCOL_SOURCES "")
 set(PROTOCOL_HDRS "")
@@ -53,6 +55,8 @@ add_executable(simpbar
     src/toplevel.c
     src/icon_loader.c
     src/battery.c
+    src/battery_history.c
+    src/popup.c
     src/volume.c
     src/backlight.c
     src/clock.c

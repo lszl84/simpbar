@@ -3,12 +3,15 @@
 #include "workspace.h"
 #include "toplevel.h"
 #include "battery.h"
+#include "battery_history.h"
+#include "popup.h"
 #include "volume.h"
 #include "backlight.h"
 #include "clock.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "ext-workspace-v1-client-protocol.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
+#include "xdg-shell-client-protocol.h"
 #include <wayland-cursor.h>
 
 #include <stdio.h>
@@ -225,6 +228,14 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     {
         double bw = 18, bh = 9;
         double ix = rx - bw - 2, iy = cy;
+
+        /* Hit rect covers the battery icon, percentage, and time-remaining
+         * text — the whole "battery section" the user perceives. */
+        bar->battery_hit_x = ix;
+        bar->battery_hit_y = 0;
+        bar->battery_hit_w = (text_start + total_width) - ix;
+        bar->battery_hit_h = h;
+
         cairo_set_line_width(cr, 1.0);
         cairo_set_source_rgb(cr, 0.6, 0.6, 0.6);
         cairo_rectangle(cr, ix, iy - bh/2, bw, bh);
@@ -547,15 +558,44 @@ static const struct zwlr_layer_surface_v1_listener layer_listener = {
     .closed = layer_closed,
 };
 
+static bool point_in_battery(struct bar *bar, double x, double y) {
+    return x >= bar->battery_hit_x &&
+           x < bar->battery_hit_x + bar->battery_hit_w &&
+           y >= bar->battery_hit_y &&
+           y < bar->battery_hit_y + bar->battery_hit_h;
+}
+
+static void update_battery_popup(struct bar *bar) {
+    bool want = bar->pointer_over_battery || bar->pointer_over_popup;
+
+    if (want && !bar->battery_popup) {
+        bar->battery_popup = popup_create_battery(bar,
+            bar->battery_hit_x, bar->battery_hit_y,
+            bar->battery_hit_w, bar->battery_hit_h);
+    } else if (!want && bar->battery_popup) {
+        popup_destroy(bar->battery_popup);
+        bar->battery_popup = NULL;
+    }
+}
+
 // Pointer events for click handling
 static void pointer_enter(void *data, struct wl_pointer *pointer,
                           uint32_t serial, struct wl_surface *surface,
                           wl_fixed_t sx, wl_fixed_t sy) {
-    (void)surface;
     struct bar *bar = data;
-    bar->pointer_inside = true;
-    bar->pointer_x = wl_fixed_to_double(sx);
-    bar->pointer_y = wl_fixed_to_double(sy);
+    double x = wl_fixed_to_double(sx);
+    double y = wl_fixed_to_double(sy);
+
+    if (surface == bar->surface) {
+        bar->pointer_inside = true;
+        bar->pointer_x = x;
+        bar->pointer_y = y;
+        bar->pointer_over_battery = point_in_battery(bar, x, y);
+    } else if (popup_owns_surface(bar->battery_popup, surface)) {
+        bar->pointer_over_popup = true;
+    }
+
+    update_battery_popup(bar);
 
     if (bar->cursor_theme && bar->cursor_surface) {
         struct wl_cursor *cursor = wl_cursor_theme_get_cursor(bar->cursor_theme, "default");
@@ -575,17 +615,38 @@ static void pointer_enter(void *data, struct wl_pointer *pointer,
 
 static void pointer_leave(void *data, struct wl_pointer *pointer,
                           uint32_t serial, struct wl_surface *surface) {
-    (void)pointer; (void)serial; (void)surface;
+    (void)pointer; (void)serial;
     struct bar *bar = data;
-    bar->pointer_inside = false;
+
+    if (surface == bar->surface) {
+        bar->pointer_inside = false;
+        bar->pointer_over_battery = false;
+    } else if (popup_owns_surface(bar->battery_popup, surface)) {
+        bar->pointer_over_popup = false;
+    }
+
+    update_battery_popup(bar);
 }
 
 static void pointer_motion(void *data, struct wl_pointer *pointer,
                            uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
     (void)pointer; (void)time;
     struct bar *bar = data;
-    bar->pointer_x = wl_fixed_to_double(sx);
-    bar->pointer_y = wl_fixed_to_double(sy);
+    double x = wl_fixed_to_double(sx);
+    double y = wl_fixed_to_double(sy);
+
+    /* Motion events don't carry a surface; assume bar surface (motion on
+     * popup is irrelevant to us). The pointer_inside flag tells us whether
+     * the pointer is still on the bar. */
+    if (bar->pointer_inside) {
+        bar->pointer_x = x;
+        bar->pointer_y = y;
+        bool over = point_in_battery(bar, x, y);
+        if (over != bar->pointer_over_battery) {
+            bar->pointer_over_battery = over;
+            update_battery_popup(bar);
+        }
+    }
 }
 
 static void pointer_button(void *data, struct wl_pointer *pointer,
@@ -704,6 +765,7 @@ struct bar *bar_create(void) {
     wl_display_roundtrip(bar->display);
 
     bar->battery = battery_create(bar);
+    bar->battery_history = battery_history_create();
     bar->volume = volume_create(bar);
     bar->backlight = backlight_create(bar);
     bar->clock = clock_create(bar);
@@ -715,7 +777,7 @@ struct bar *bar_create(void) {
 
     bar->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
         bar->layer_shell, bar->surface, NULL,
-        ZWLR_LAYER_SURFACE_V1_LAYER_TOP, "simpbar");
+        ZWLR_LAYER_SHELL_V1_LAYER_TOP, "simpbar");
 
     zwlr_layer_surface_v1_set_size(bar->layer_surface, 0, BAR_HEIGHT);
     zwlr_layer_surface_v1_set_anchor(bar->layer_surface,
@@ -734,6 +796,8 @@ struct bar *bar_create(void) {
 void bar_destroy(struct bar *bar) {
     if (!bar) return;
 
+    if (bar->battery_popup) { popup_destroy(bar->battery_popup); bar->battery_popup = NULL; }
+
     buffer_destroy(buffers[0]); buffers[0] = NULL;
     buffer_destroy(buffers[1]); buffers[1] = NULL;
 
@@ -743,6 +807,7 @@ void bar_destroy(struct bar *bar) {
     if (bar->layer_surface) zwlr_layer_surface_v1_destroy(bar->layer_surface);
     if (bar->surface) wl_surface_destroy(bar->surface);
     if (bar->layer_shell) zwlr_layer_shell_v1_destroy(bar->layer_shell);
+    if (bar->xdg_wm_base) xdg_wm_base_destroy(bar->xdg_wm_base);
     if (bar->shm) wl_shm_destroy(bar->shm);
     if (bar->seat) wl_seat_destroy(bar->seat);
     if (bar->subcompositor) wl_subcompositor_destroy(bar->subcompositor);
@@ -752,6 +817,7 @@ void bar_destroy(struct bar *bar) {
     if (bar->clock) clock_destroy(bar->clock);
     if (bar->backlight) backlight_destroy(bar->backlight);
     if (bar->volume) volume_destroy(bar->volume);
+    if (bar->battery_history) battery_history_destroy(bar->battery_history);
     if (bar->battery) battery_destroy(bar->battery);
     if (bar->toplevel_mgr) toplevel_manager_destroy(bar->toplevel_mgr);
     if (bar->workspace_mgr) workspace_manager_destroy(bar->workspace_mgr);
@@ -848,6 +914,15 @@ int bar_run(struct bar *bar) {
             if (bar->configured) {
                 clock_update(bar->clock);
                 battery_update(bar->battery);
+                /* Refresh the battery-history cache from upower every
+                 * HISTORY_REFRESH_INTERVAL_SEC ticks. */
+                if (bar->battery_history) {
+                    int64_t now = (int64_t)time(NULL);
+                    if (now - bar->battery_history->last_refresh_ts
+                            >= HISTORY_REFRESH_INTERVAL_SEC) {
+                        battery_history_refresh(bar->battery_history);
+                    }
+                }
                 render_frame(bar);
             }
         }
