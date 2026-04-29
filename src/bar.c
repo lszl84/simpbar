@@ -391,7 +391,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
 
     // Running applications (left side, stable order)
     {
-        double lx = 10;
+        double lx = 14;
         double icon_draw_sz = h - 10;
         double icon_gap = 4;
 
