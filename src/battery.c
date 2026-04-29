@@ -109,6 +109,50 @@ void battery_update(struct battery *bat) {
             bat->state = BATTERY_UNKNOWN;
         }
     }
+
+    // Compute time remaining (minutes)
+    bat->time_remaining = -1;
+
+    int energy_now = -1, power_now = -1;
+    int charge_now = -1, current_now = -1;
+
+    snprintf(buf, sizeof(buf), "%s/energy_now", bat->path);
+    energy_now = read_int_from_file(buf);
+    snprintf(buf, sizeof(buf), "%s/power_now", bat->path);
+    power_now = read_int_from_file(buf);
+
+    if (energy_now < 0 || power_now < 0) {
+        snprintf(buf, sizeof(buf), "%s/charge_now", bat->path);
+        charge_now = read_int_from_file(buf);
+        snprintf(buf, sizeof(buf), "%s/current_now", bat->path);
+        current_now = read_int_from_file(buf);
+    }
+
+    int numerator = -1, denominator = -1;
+    if (energy_now >= 0 && power_now > 0) {
+        numerator = energy_now;
+        denominator = power_now;
+    } else if (charge_now >= 0 && current_now > 0) {
+        numerator = charge_now;
+        denominator = current_now;
+    }
+
+    if (numerator >= 0 && denominator > 0) {
+        if (bat->state == BATTERY_DISCHARGING) {
+            bat->time_remaining = (int)((60.0 * numerator) / denominator);
+        } else if (bat->state == BATTERY_CHARGING) {
+            int full = -1;
+            snprintf(buf, sizeof(buf), "%s/energy_full", bat->path);
+            full = read_int_from_file(buf);
+            if (full < 0) {
+                snprintf(buf, sizeof(buf), "%s/charge_full", bat->path);
+                full = read_int_from_file(buf);
+            }
+            if (full >= 0 && full > numerator) {
+                bat->time_remaining = (int)((60.0 * (full - numerator)) / denominator);
+            }
+        }
+    }
 }
 
 void battery_render(struct battery *bat) {

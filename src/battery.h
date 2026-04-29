@@ -20,6 +20,7 @@ struct battery {
     int percentage;
     enum battery_state state;
     bool available;
+    int time_remaining;  // minutes, -1 if unknown
 };
 
 struct battery *battery_create(struct bar *bar);

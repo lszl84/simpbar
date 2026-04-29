@@ -166,6 +166,35 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     cairo_set_source_rgb(cr, br, bg, bb);
     cairo_move_to(cr, rx, text_y);
     cairo_show_text(cr, buf);
+
+    // Battery time remaining (lighter gray)
+    if (bar->battery->time_remaining >= 0) {
+        int mins = bar->battery->time_remaining;
+        double hours = mins / 60.0;
+        int whole = (int)hours;
+        double frac = hours - whole;
+
+        const char *frac_str = "";
+        if (frac >= 0.875) { whole++; }
+        else if (frac >= 0.625) { frac_str = "\xC2\xBE"; }   // ¾
+        else if (frac >= 0.375) { frac_str = "\xC2\xBD"; }   // ½
+        else if (frac >= 0.125) { frac_str = "\xC2\xBC"; }   // ¼
+
+        char time_buf[32];
+        if (whole > 0) {
+            snprintf(time_buf, sizeof(time_buf), " (%d%sh)", whole, frac_str);
+        } else {
+            snprintf(time_buf, sizeof(time_buf), " (%sm)", frac_str);
+        }
+
+        cairo_text_extents_t time_ext;
+        cairo_text_extents(cr, time_buf, &time_ext);
+        rx -= time_ext.width;
+        cairo_set_source_rgb(cr, 0.55, 0.55, 0.58);
+        cairo_move_to(cr, rx, text_y);
+        cairo_show_text(cr, time_buf);
+    }
+
     rx -= 5;
 
     {
