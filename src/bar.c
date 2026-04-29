@@ -160,7 +160,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     cairo_text_extents(cr, buf, &ext);
     double pct_width = ext.width;
 
-    // Build time-remaining string (drawn after percentage, to its right)
+    // Build time-remaining string (drawn after percentage, to its right, no parens)
     char time_buf[32] = "";
     if (bar->battery->time_remaining >= 0) {
         int mins = bar->battery->time_remaining;
@@ -175,22 +175,22 @@ static void render_content(struct bar *bar, cairo_t *cr) {
         else if (frac >= 0.125) { frac_str = "\xC2\xBC"; }   // ¼
 
         if (whole > 0) {
-            snprintf(time_buf, sizeof(time_buf), " (%d%sh)", whole, frac_str);
+            snprintf(time_buf, sizeof(time_buf), " %d%sh", whole, frac_str);
         } else {
-            // Less than 1 hour — show minutes
             int rem_mins = (int)(frac * 60.0 + 0.5);
             if (rem_mins > 0) {
-                snprintf(time_buf, sizeof(time_buf), " (%dm)", rem_mins);
+                snprintf(time_buf, sizeof(time_buf), " %dm", rem_mins);
             }
         }
     }
 
-    cairo_text_extents_t time_ext = {0};
-    if (time_buf[0]) {
-        cairo_text_extents(cr, time_buf, &time_ext);
-    }
+    // Fixed-width time area so icons don't shift when fraction changes
+    char time_ref[] = " 9\xC2\xBEh";
+    cairo_text_extents_t time_ref_ext;
+    cairo_text_extents(cr, time_ref, &time_ref_ext);
+    double time_reserved = time_buf[0] ? time_ref_ext.width : 0;
 
-    double total_width = pct_width + time_ext.width;
+    double total_width = pct_width + time_reserved;
     rx -= total_width;
     double text_start = rx;
 
@@ -204,7 +204,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     cairo_move_to(cr, text_start, text_y);
     cairo_show_text(cr, buf);
 
-    // Draw time remaining to the right of percentage
+    // Draw time remaining to the right of percentage (fixed-width zone)
     if (time_buf[0]) {
         cairo_set_source_rgb(cr, 0.55, 0.55, 0.58);
         cairo_move_to(cr, text_start + pct_width, text_y);
