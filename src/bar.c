@@ -162,6 +162,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
 
     // Build time-remaining string (drawn after percentage, to its right, no parens)
     char time_buf[32] = "";
+    double time_actual_width = 0;
     if (bar->battery->time_remaining >= 0) {
         int mins = bar->battery->time_remaining;
         double hours = mins / 60.0;
@@ -175,22 +176,29 @@ static void render_content(struct bar *bar, cairo_t *cr) {
         else if (frac >= 0.125) { frac_str = "\xC2\xBC"; }   // ¼
 
         if (whole > 0) {
-            snprintf(time_buf, sizeof(time_buf), " %d%sh", whole, frac_str);
+            snprintf(time_buf, sizeof(time_buf), "%d%sh", whole, frac_str);
         } else {
             int rem_mins = (int)(frac * 60.0 + 0.5);
             if (rem_mins > 0) {
-                snprintf(time_buf, sizeof(time_buf), " %dm", rem_mins);
+                snprintf(time_buf, sizeof(time_buf), "%dm", rem_mins);
             }
+        }
+
+        if (time_buf[0]) {
+            cairo_text_extents_t time_actual_ext;
+            cairo_text_extents(cr, time_buf, &time_actual_ext);
+            time_actual_width = time_actual_ext.width;
         }
     }
 
     // Fixed-width time area so icons don't shift when fraction changes
-    char time_ref[] = " 9\xC2\xBEh";
+    double time_gap = 5;
+    char time_ref[] = "9\xC2\xBEh";
     cairo_text_extents_t time_ref_ext;
     cairo_text_extents(cr, time_ref, &time_ref_ext);
     double time_reserved = time_buf[0] ? time_ref_ext.width : 0;
 
-    double total_width = pct_width + time_reserved;
+    double total_width = pct_width + time_gap + time_reserved;
     rx -= total_width;
     double text_start = rx;
 
@@ -204,10 +212,11 @@ static void render_content(struct bar *bar, cairo_t *cr) {
     cairo_move_to(cr, text_start, text_y);
     cairo_show_text(cr, buf);
 
-    // Draw time remaining to the right of percentage (fixed-width zone)
+    // Draw time remaining centered in its fixed-width zone
     if (time_buf[0]) {
+        double time_x = text_start + pct_width + time_gap + (time_reserved - time_actual_width) / 2.0;
         cairo_set_source_rgb(cr, 0.55, 0.55, 0.58);
-        cairo_move_to(cr, text_start + pct_width, text_y);
+        cairo_move_to(cr, time_x, text_y);
         cairo_show_text(cr, time_buf);
     }
 
@@ -391,7 +400,7 @@ static void render_content(struct bar *bar, cairo_t *cr) {
 
     // Running applications (left side, stable order)
     {
-        double lx = 14;
+        double lx = 10;
         double icon_draw_sz = h - 10;
         double icon_gap = 4;
 
