@@ -306,18 +306,41 @@ void battery_history_buckets(struct battery_history *h,
     }
 }
 
+/* Find the start of the most recent discharge run. Many upower setups write
+ * every history record tagged "discharging" even when the battery is being
+ * charged (state field unreliable), so we detect charge events as percentage
+ * increases between consecutive records — the only signal we can trust. The
+ * `state` field is checked too as a secondary signal for systems that do
+ * record it. */
 int64_t battery_history_autonomy_secs(struct battery_history *h) {
     if (!h || h->count == 0) return -1;
 
-    int64_t charge_end = -1;
-    for (size_t i = h->count; i-- > 0; ) {
+    size_t newest = h->count - 1;
+    size_t run_start = 0;
+    bool found = false;
+
+    for (size_t i = newest + 1; i-- > 0; ) {
         uint8_t s = h->records[i].state;
         if (s == HIST_CHARGING || s == HIST_FULL) {
-            charge_end = h->records[i].timestamp;
+            /* Record itself reflects a charge state. Run begins at the next
+             * (newer) record, or at this one if it's the latest. */
+            run_start = (i < newest) ? i + 1 : newest;
+            found = true;
             break;
         }
+        if (i > 0) {
+            int newer = h->records[i].percentage;
+            int older = h->records[i - 1].percentage;
+            /* Tolerate 1% noise; require a real jump up to call it a charge. */
+            if (older + 1 < newer) {
+                run_start = i;
+                found = true;
+                break;
+            }
+        }
     }
-    if (charge_end < 0) charge_end = h->records[0].timestamp;
+    if (!found) run_start = 0;
 
-    return awake_time_in_range(h, charge_end, now_secs());
+    int64_t boundary = h->records[run_start].timestamp;
+    return awake_time_in_range(h, boundary, now_secs());
 }

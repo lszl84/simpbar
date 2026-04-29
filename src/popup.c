@@ -137,16 +137,24 @@ static void render_chart(struct popup *p, cairo_t *cr) {
     cairo_move_to(cr, chart_right - te.width, chart_bottom + 12);
     cairo_show_text(cr, "now");
 
-    /* Autonomy text */
-    int64_t autonomy = battery_history_autonomy_secs(p->bar->battery_history);
+    /* Autonomy text — live battery state is authoritative; only fall back to
+     * history when we're actually on battery. */
     char auton_buf[128];
-    if (autonomy < 0) {
-        snprintf(auton_buf, sizeof(auton_buf), "Autonomy: no data yet");
+    enum battery_state bst = p->bar->battery->state;
+    if (bst == BATTERY_CHARGING) {
+        snprintf(auton_buf, sizeof(auton_buf), "Currently charging");
+    } else if (bst == BATTERY_FULL) {
+        snprintf(auton_buf, sizeof(auton_buf), "Plugged in — fully charged");
     } else {
-        int hours = (int)(autonomy / 3600);
-        int mins = (int)((autonomy % 3600) / 60);
-        snprintf(auton_buf, sizeof(auton_buf),
-                 "Autonomy since last charge: %dh %02dmin", hours, mins);
+        int64_t autonomy = battery_history_autonomy_secs(p->bar->battery_history);
+        if (autonomy < 0) {
+            snprintf(auton_buf, sizeof(auton_buf), "Autonomy: no data yet");
+        } else {
+            int hours = (int)(autonomy / 3600);
+            int mins = (int)((autonomy % 3600) / 60);
+            snprintf(auton_buf, sizeof(auton_buf),
+                     "Autonomy since last charge: %dh %02dmin", hours, mins);
+        }
     }
     cairo_set_font_size(cr, 12);
     cairo_set_source_rgba(cr, 0.92, 0.92, 0.94, 0.95);
