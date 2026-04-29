@@ -12,6 +12,11 @@ void bar_destroy(struct bar *bar);
 int bar_run(struct bar *bar);
 void bar_redraw(struct bar *bar);
 
+/* Layer surface lifecycle — invoked by registry when our wl_output goes
+ * away (e.g. across a VT switch) and a new one appears. */
+void bar_setup_layer_surface(struct bar *bar);
+void bar_teardown_layer_surface(struct bar *bar);
+
 struct bar {
     struct wl_display *display;
     struct wl_registry *registry;
@@ -26,6 +31,7 @@ struct bar {
     struct zwlr_layer_surface_v1 *layer_surface;
     struct wl_surface *surface;
     struct wl_output *output;
+    uint32_t output_id;
     struct ext_workspace_manager_v1 *workspace_proto;
     struct zwlr_foreign_toplevel_manager_v1 *toplevel_mgr_proto;
     struct xdg_wm_base *xdg_wm_base;
@@ -44,6 +50,7 @@ struct bar {
     int scale;
     bool configured;
     bool pending_redraw;
+    bool initialized;  /* bar_create completed; safe to handle layer events */
     int running;
 
     double pointer_x;

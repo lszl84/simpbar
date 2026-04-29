@@ -513,7 +513,7 @@ static void render_frame(struct bar *bar) {
 
     struct buffer *buf = get_buffer(bar);
     if (!buf) {
-        /* Both buffers busy, render on next release callback immediately. */
+        /* Both buffers busy — render on the next release callback. */
         bar->pending_redraw = true;
         return;
     }
@@ -550,6 +550,7 @@ static void layer_configure(void *data, struct zwlr_layer_surface_v1 *lsurf,
 static void layer_closed(void *data, struct zwlr_layer_surface_v1 *lsurf) {
     (void)lsurf;
     struct bar *bar = data;
+    fprintf(stderr, "[simpbar] exit: layer_surface closed by compositor\n");
     bar->running = 0;
 }
 
@@ -773,6 +774,17 @@ struct bar *bar_create(void) {
     bar->cursor_theme = wl_cursor_theme_load(NULL, 24 * bar->scale, bar->shm);
     bar->cursor_surface = wl_compositor_create_surface(bar->compositor);
 
+    bar_setup_layer_surface(bar);
+    wl_display_roundtrip(bar->display);
+
+    bar->initialized = true;
+    return bar;
+}
+
+void bar_setup_layer_surface(struct bar *bar) {
+    if (!bar->compositor || !bar->layer_shell) return;
+    if (bar->surface || bar->layer_surface) return;
+
     bar->surface = wl_compositor_create_surface(bar->compositor);
 
     bar->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
@@ -788,9 +800,26 @@ struct bar *bar_create(void) {
     zwlr_layer_surface_v1_add_listener(bar->layer_surface, &layer_listener, bar);
 
     wl_surface_commit(bar->surface);
-    wl_display_roundtrip(bar->display);
+}
 
-    return bar;
+void bar_teardown_layer_surface(struct bar *bar) {
+    if (bar->battery_popup) {
+        popup_destroy(bar->battery_popup);
+        bar->battery_popup = NULL;
+    }
+    if (bar->layer_surface) {
+        zwlr_layer_surface_v1_destroy(bar->layer_surface);
+        bar->layer_surface = NULL;
+    }
+    if (bar->surface) {
+        wl_surface_destroy(bar->surface);
+        bar->surface = NULL;
+    }
+    bar->configured = false;
+    bar->pending_redraw = false;
+    bar->pointer_inside = false;
+    bar->pointer_over_battery = false;
+    bar->pointer_over_popup = false;
 }
 
 void bar_destroy(struct bar *bar) {
@@ -884,16 +913,26 @@ int bar_run(struct bar *bar) {
         if (n < 0) {
             wl_display_cancel_read(bar->display);
             if (errno == EINTR) continue;
+            fprintf(stderr, "[simpbar] exit: poll() failed: %s\n", strerror(errno));
             break;
         }
 
         if (pfds[idx[SRC_WL]].revents & POLLIN) {
-            if (wl_display_read_events(bar->display) < 0) break;
+            if (wl_display_read_events(bar->display) < 0) {
+                int err = wl_display_get_error(bar->display);
+                fprintf(stderr, "[simpbar] exit: wl_display_read_events failed (errno=%d: %s, wl_err=%d)\n",
+                        errno, strerror(errno), err);
+                break;
+            }
             wl_display_dispatch_pending(bar->display);
         } else {
             wl_display_cancel_read(bar->display);
         }
-        if (pfds[idx[SRC_WL]].revents & (POLLERR | POLLHUP)) break;
+        if (pfds[idx[SRC_WL]].revents & (POLLERR | POLLHUP)) {
+            fprintf(stderr, "[simpbar] exit: wayland fd POLLERR/POLLHUP (revents=0x%x)\n",
+                    pfds[idx[SRC_WL]].revents);
+            break;
+        }
 
         if (idx[SRC_VOL] >= 0 && (pfds[idx[SRC_VOL]].revents & POLLIN)) {
             if (volume_dispatch(bar->volume) && bar->configured) {

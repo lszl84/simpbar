@@ -39,6 +39,16 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, "wl_output") == 0) {
         if (!bar->output) {
             bar->output = wl_registry_bind(registry, id, &wl_output_interface, 1);
+            bar->output_id = id;
+            /* During the initial registry roundtrip, bar->initialized
+             * is false and bar_create handles layer surface setup
+             * explicitly once all subsystems exist. After that, this
+             * runs when a new output appears (e.g. labwc destroys and
+             * recreates outputs across a VT switch) — recreate the
+             * layer surface so the bar shows up again. */
+            if (bar->initialized) {
+                bar_setup_layer_surface(bar);
+            }
         }
     } else if (strcmp(interface, "ext_workspace_manager_v1") == 0) {
         bar->workspace_proto = wl_registry_bind(registry, id,
@@ -55,7 +65,17 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
 }
 
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t id) {
-    (void)data; (void)registry; (void)id;
+    (void)registry;
+    struct bar *bar = data;
+    if (bar->output && id == bar->output_id) {
+        /* Compositor destroyed our output (typical on VT switch).
+         * Tear down the layer surface so we can rebuild it cleanly
+         * when the new output is announced. */
+        bar_teardown_layer_surface(bar);
+        wl_output_destroy(bar->output);
+        bar->output = NULL;
+        bar->output_id = 0;
+    }
 }
 
 static const struct wl_registry_listener registry_listener = {
